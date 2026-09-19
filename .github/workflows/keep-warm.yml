@@ -1,0 +1,15 @@
+name: Keep the API warm
+
+# The free hosting tier sleeps after about fifteen idle minutes and takes most of a minute to wake.
+# A request every ten minutes keeps it awake, within the tier's monthly hours. GitHub's scheduler
+# can run late, so the interface also shows a "waking the server" notice if a request is slow.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl --silent --show-error --max-time 90 --retry 2 "${{ vars.API_HEALTH_URL || 'https://trao-interview-prep-kit-backend.onrender.com/api/health' }}"
