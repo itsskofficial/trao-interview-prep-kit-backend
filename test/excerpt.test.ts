@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { processDigest } from "../src/retrieval/excerpt";
 
-const terms = { strong: ["take-home", "technical interview", "recruiter call", "offer"], weak: ["interview", "stage", "recruiter"] };
+const terms = { strong: [/take-home/, /technical interview/, /recruiter call/, /\boffer\b/], weak: [/interview/, /\bstage\b/, /recruiter/] };
 const filler = (n: number, label: string) => Array.from({ length: n }, (_, i) => `${label} paragraph ${i} about our philosophy and values and how we think.`);
 
 describe("processDigest", () => {

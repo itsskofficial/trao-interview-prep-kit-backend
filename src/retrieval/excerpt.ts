@@ -10,12 +10,12 @@
  * order, the lines that mention the terms at all. If that is still too long,
  * the lines that say least are dropped first. A page that fits is returned whole.
  */
-export function processDigest(text: string, terms: { strong: string[]; weak: string[] }, maxChars: number): string {
+export function processDigest(text: string, terms: { strong: RegExp[]; weak: RegExp[] }, maxChars: number): string {
   if (text.length <= maxChars) return text;
 
   const scored = text.split("\n").map((line, index) => {
     const lower = line.toLowerCase();
-    const count = (list: string[]) => list.filter((term) => lower.includes(term)).length;
+    const count = (list: RegExp[]) => list.filter((term) => term.test(lower)).length;
     return { line, index, score: count(terms.strong) * 3 + count(terms.weak) };
   });
 

@@ -119,7 +119,11 @@ export function createPageFetcher(options: FetcherOptions): PageFetcher {
       await response.body?.cancel().catch(() => undefined);
       const location = response.headers.get("location");
       if (!location) return { ok: false, url: url.href, reason: "http_error", status: response.status, detail: "Redirect without a Location header." };
-      return { redirectTo: new URL(location, url).href };
+      try {
+        return { redirectTo: new URL(location, url).href };
+      } catch {
+        return { ok: false, url: url.href, reason: "http_error", status: response.status, detail: "Redirect to an address that is not a URL." };
+      }
     }
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);

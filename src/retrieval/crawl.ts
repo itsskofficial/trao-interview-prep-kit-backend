@@ -30,23 +30,34 @@ export interface SiteCrawl {
 export interface CrawlOptions {
   maxPages?: number;
   maxDepth?: number;
+  /** Wall-clock budget for the whole crawl. A slow site costs the research, not the kit. */
+  deadlineMs?: number;
+  now?: () => number;
 }
 
-/** Words that appear when a page describes a hiring process rather than just listing jobs. */
-export const PROCESS_TERMS = [
-  "interview", "hiring process", "recruiter", "phone screen", "screening call", "take-home", "take home", "coding challenge",
-  "technical assessment", "assessment", "pair programming", "pairing session", "system design", "onsite", "on-site",
-  "final round", "stage", "round", "offer", "hiring manager", "reference check", "values interview", "work sample",
-];
-/** Terms that name a stage outright, as opposed to words that merely turn up around hiring. */
-export const STAGE_TERMS = [
-  "phone screen", "screening call", "recruiter call", "take-home", "take home", "coding challenge", "technical assessment",
-  "technical interview", "pair programming", "pairing session", "system design", "onsite", "on-site", "final round",
-  "values interview", "culture interview", "work sample", "superday", "reference check", "offer",
+/**
+ * Wording that appears when a page describes a hiring process rather than just listing jobs.
+ * Whole words only: "round" is not in "around", "stage" is not in "backstage", and a company
+ * that says "we offer competitive pay" has not described an offer stage.
+ */
+export const PROCESS_TERMS: RegExp[] = [
+  /\binterview(s|ed|ing|ers?)?\b/, /\bhiring process\b/, /\brecruiters?\b/, /\bphone screen\b/, /\bscreening call\b/,
+  /\btake[- ]home\b/, /\bcoding challenge\b/, /\b(technical )?assessment\b/, /\bpair(ing)? (programming|session)\b/,
+  /\bsystem design\b/, /\bon-?site\b/, /\bfinal round\b/, /\bhiring manager\b/, /\breference checks?\b/, /\bwork sample\b/,
+  /\b(first|second|third|final|next|\d+(st|nd|rd|th)?) (round|stage)\b/, /\b(round|stage) (\d|one|two|three|four|five)\b/,
+  /\b(make|makes|made|extend|extends|send|sends|receive) (you )?(an?|the|our) offer\b/, /\boffer (stage|call|letter)\b/,
 ];
 
-/** "Stage", "round" and "offer" also describe funding and pricing, so one of these must be present too. */
-const PROCESS_ANCHORS = ["interview", "hiring process", "how we hire", "recruit"];
+/** Terms that name a stage outright, as opposed to words that merely turn up around hiring. */
+export const STAGE_TERMS: RegExp[] = [
+  /\bphone screen\b/, /\bscreening call\b/, /\brecruiter (call|screen)\b/, /\btake[- ]home\b/, /\bcoding challenge\b/,
+  /\btechnical (assessment|interview|screen)\b/, /\bpair(ing)? (programming|session)\b/, /\bsystem design\b/, /\bon-?site\b/,
+  /\bfinal round\b/, /\b(values|culture|cultural) interview\b/, /\bwork sample\b/, /\bsuperday\b/, /\breference checks?\b/,
+  /\b(make|makes|made|extend|extends|send|sends) (you )?(an?|the|our) offer\b/, /\boffer (stage|call|letter)\b/,
+];
+
+/** A page must talk about interviewing or recruiting at all before its other process wording counts. */
+const PROCESS_ANCHORS: RegExp[] = [/\binterview/, /\bhiring process\b/, /\bhow we hire\b/, /\brecruit/];
 const MIN_PROCESS_TERMS = 3;
 const MAX_PAGE_TEXT_CHARS = 80_000;
 /** A page this clearly about the process ends the search for a better one. */
@@ -59,7 +70,8 @@ const CONFIDENT_PROCESS_TERMS = 6;
  * called "Careers" that leads to a job list does not qualify.
  */
 export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher, options: CrawlOptions = {}): Promise<SiteCrawl> {
-  const { maxPages = 12, maxDepth = 2 } = options;
+  const { maxPages = 12, maxDepth = 2, deadlineMs = 45_000, now = Date.now } = options;
+  const startedAt = now();
   const log: ResearchLogEntry[] = [];
   const pages: CrawledPage[] = [];
 
@@ -70,6 +82,13 @@ export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher,
   }
 
   const origin = new URL(homeResult.url).origin;
+  // Several companies can live under one origin (http://host/acme/, http://host/globex/). The company's
+  // site is then everything under its own folder, and nothing beside it.
+  const scope = siteScope(homeResult.url);
+  const inScope = (url: string) => {
+    const parsed = new URL(url);
+    return parsed.origin === origin && (scope === "/" || parsed.pathname.startsWith(scope) || `${parsed.pathname}/` === scope);
+  };
   const visited = new Set<string>([normaliseUrl(homeResult.url), normaliseUrl(companyUrl)]);
   const queue: RankedLink[] = [];
 
@@ -93,16 +112,23 @@ export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher,
 
   const enqueue = (links: PageLink[], depth: number, parentHiringScore: number) => {
     for (const link of links) {
-      if (new URL(link.url).origin !== origin || visited.has(normaliseUrl(link.url))) continue;
+      if (!inScope(link.url) || visited.has(normaliseUrl(link.url))) continue;
       const ranked = rankLink(link, depth, parentHiringScore);
       if (ranked && !queue.some((queued) => normaliseUrl(queued.url) === normaliseUrl(ranked.url))) queue.push(ranked);
     }
   };
 
   const home = visit(homeResult, 0);
-  enqueue(await sitemapLinks(homeResult.url, fetcher, log), 1, 0);
+  enqueue(await sitemapLinks(new URL("sitemap.xml", `${origin}${scope}`).href, fetcher, log), 1, 0);
 
-  while (pages.length < maxPages && queue.length > 0) {
+  // Failed fetches count too: a site whose every link errors must not be tried two hundred times.
+  let attempts = 0;
+  while (pages.length < maxPages && attempts < maxPages * 2 && queue.length > 0) {
+    if (now() - startedAt > deadlineMs) {
+      log.push({ source: "company-site", outcome: "skipped", reason: `Stopped reading the site after ${Math.round(deadlineMs / 1000)} seconds; ${queue.length} link(s) were not followed.` });
+      break;
+    }
+    attempts++;
     queue.sort(byScore);
     const next = queue.shift()!;
     if (visited.has(normaliseUrl(next.url))) continue;
@@ -111,6 +137,11 @@ export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher,
     const result = await fetcher.fetchPage(next.url);
     if (!result.ok) {
       log.push({ source: "company-site", url: result.url, outcome: "skipped", reason: describe(result) });
+      continue;
+    }
+    // A link inside the company's folder that redirects out of it has left the company's site.
+    if (!inScope(result.url)) {
+      log.push({ source: "company-site", url: result.url, outcome: "skipped", reason: "The link leads outside this company's site." });
       continue;
     }
     visited.add(normaliseUrl(result.url));
@@ -139,14 +170,22 @@ export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher,
 
 function countProcessTerms(text: string): number {
   const lower = text.toLowerCase();
-  if (!PROCESS_ANCHORS.some((term) => lower.includes(term))) return 0;
+  if (!PROCESS_ANCHORS.some((term) => term.test(lower))) return 0;
   // "Interview" alone is what a job list says too; a process page uses several of these together.
-  return PROCESS_TERMS.filter((term) => lower.includes(term)).length;
+  return PROCESS_TERMS.filter((term) => term.test(lower)).length;
+}
+
+/** The folder the company's site lives in: "/" for a whole origin, "/acme/" for http://host/acme/ or http://host/acme. */
+function siteScope(homeUrl: string): string {
+  const { pathname } = new URL(homeUrl);
+  if (pathname.endsWith("/")) return pathname;
+  const last = pathname.slice(pathname.lastIndexOf("/") + 1);
+  // "/acme" names a folder; "/acme/index.html" names a file inside one.
+  return last.includes(".") ? pathname.slice(0, pathname.lastIndexOf("/") + 1) : `${pathname}/`;
 }
 
 /** sitemap.xml next to the company URL, when there is one. Its entries are ranked like any other link. */
-async function sitemapLinks(homeUrl: string, fetcher: PageFetcher, log: ResearchLogEntry[]): Promise<PageLink[]> {
-  const sitemapUrl = new URL("sitemap.xml", homeUrl).href;
+async function sitemapLinks(sitemapUrl: string, fetcher: PageFetcher, log: ResearchLogEntry[]): Promise<PageLink[]> {
   const result = await fetcher.fetchPage(sitemapUrl, "xml");
   if (!result.ok) return [];
 
