@@ -34,7 +34,13 @@ async function main(): Promise<number> {
 
   console.error(`Running ${cases.length} case(s) with ${config.LLM_PROVIDER}...`);
   const fetcher = createPageFetcher({ allowPrivate: allowsPrivateUrls(config) });
-  const output = await runBatch(cases, { llm, fetcher, log: (line) => console.error(line) }).finally(() => fetcher.close());
+  const output = await runBatch(cases, {
+    llm,
+    fetcher,
+    concurrency: config.BATCH_CONCURRENCY,
+    caseTimeoutMs: config.CASE_TIMEOUT_MS,
+    log: (line) => console.error(line),
+  }).finally(() => fetcher.close());
 
   // Write to a temporary file first so a crash never leaves a half-written result.
   const target = path.resolve(values.output);

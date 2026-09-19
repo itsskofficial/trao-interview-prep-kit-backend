@@ -1,6 +1,7 @@
 import type { Config } from "../config";
 import { createLlmClient, type LlmEvent, type ProviderSlot } from "./client";
 import { geminiProvider } from "./providers/gemini";
+import { groqProvider } from "./providers/groq";
 import { RateLimiter } from "./rate-limiter";
 import { withReplayCache } from "./replay-cache";
 import type { LlmClient } from "./types";
@@ -19,8 +20,18 @@ export function createLlmClientFromConfig(config: Config, onEvent?: (event: LlmE
     limiter: new RateLimiter({ requestsPerMinute: config.GEMINI_RPM, tokensPerMinute: config.GEMINI_TPM }),
   };
 
+  const groq: ProviderSlot = {
+    provider: groqProvider({ apiKey: config.GROQ_API_KEY, model: config.GROQ_MODEL }),
+    limiter: new RateLimiter({ requestsPerMinute: config.GROQ_RPM, tokensPerMinute: config.GROQ_TPM }),
+  };
+
+  // LLM_PROVIDER chooses who goes first. The other is a fallback, used when the first runs out of
+  // daily quota or fails outright, and only if a key for it was provided.
+  const [primary, fallback] = config.LLM_PROVIDER === "groq" ? [groq, gemini] : [gemini, groq];
+  const fallbackKey = config.LLM_PROVIDER === "groq" ? config.GEMINI_API_KEY : config.GROQ_API_KEY;
+
   return createLlmClient({
-    providers: [gemini].map(cached),
+    providers: [primary, ...(fallbackKey ? [fallback] : [])].map(cached),
     timeoutMs: config.LLM_TIMEOUT_MS,
     onEvent,
   });

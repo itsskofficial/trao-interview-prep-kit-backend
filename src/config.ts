@@ -9,9 +9,17 @@ const EnvSchema = z.object({
   // Defaults sit under the measured free-tier limits (15 requests/min, 250K tokens/min) to leave headroom.
   GEMINI_RPM: z.coerce.number().int().positive().default(12),
   GEMINI_TPM: z.coerce.number().int().positive().default(200_000),
+  GROQ_API_KEY: z.string().default(""),
+  GROQ_MODEL: z.string().default("openai/gpt-oss-120b"),
+  // Groq's free tier: 30 requests/min but only 8K tokens/min, which is what actually binds.
+  GROQ_RPM: z.coerce.number().int().positive().default(25),
+  GROQ_TPM: z.coerce.number().int().positive().default(7_000),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   LLM_REPLAY_CACHE: z.string().default(""),
   ALLOW_PRIVATE_URLS: z.enum(["true", "false", ""]).default(""),
+  // Batch command: how many cases run at once, and how long one case may take before it is recorded as timed out.
+  BATCH_CONCURRENCY: z.coerce.number().int().min(1).max(5).default(2),
+  CASE_TIMEOUT_MS: z.coerce.number().int().positive().default(170_000),
 });
 
 export type Config = z.infer<typeof EnvSchema>;

@@ -241,13 +241,13 @@ describe("runBatch", () => {
     const cases = [
       good,
       { id: "case-02", jd: "   ", company_url: `${site.origin}/acme/`, days: 3 },
-      { ...good, id: "case-03" },
+      { ...good, id: "case-03", days: 4 },
       { id: "case-04", jd: JD, company_url: `${site.origin}/acme/`, days: 0 },
       { ...good, id: "case-05", days: 9 },
       "not even an object",
     ];
 
-    const output = await runBatch(cases, deps(model.llm));
+    const output = await runBatch(cases, { ...deps(model.llm), concurrency: 1 });
 
     expect(BatchOutputSchema.safeParse(output).success).toBe(true);
     expect(output.kits.map((k) => [k.id, k.status, k.error?.code ?? null])).toEqual([
@@ -260,6 +260,39 @@ describe("runBatch", () => {
     ]);
     expect(output.kits[0]!.kit!.schedule.days).toHaveLength(3);
     expect(output.kits[4]!.kit!.schedule.days).toHaveLength(9);
+  });
+
+  it("runs cases concurrently but reports them in input order", async () => {
+    const model = routedModel({ extract: extraction });
+    const cases = [1, 2, 3, 4].map((n) => ({ id: `case-${n}`, jd: JD, company_url: `${site.origin}/acme/`, days: n }));
+    const lines: string[] = [];
+    const output = await runBatch(cases, { ...deps(model.llm), concurrency: 3, log: (line) => lines.push(line) });
+
+    expect(output.kits.map((k) => k.id)).toEqual(["case-1", "case-2", "case-3", "case-4"]);
+    expect(output.kits.map((k) => k.kit!.schedule.days.length)).toEqual([1, 2, 3, 4]);
+    expect(lines).toHaveLength(4);
+  });
+
+  it("researches an identical case once and gives both entries the result", async () => {
+    const model = routedModel({ extract: extraction });
+    const same = { jd: JD, company_url: `${site.origin}/acme/`, days: 5 };
+    const output = await runBatch([{ id: "first", ...same }, { id: "again", ...same }], deps(model.llm));
+
+    expect(output.kits.map((k) => [k.id, k.status])).toEqual([["first", "ok"], ["again", "ok"]]);
+    expect(model.routes().filter((route) => route === "extract")).toHaveLength(1);
+  });
+
+  it("records a case that overruns its time budget as TIMEOUT and finishes the rest", async () => {
+    const never = { ...deps(routedModel({ extract: extraction }).llm) };
+    const slowFetcher: PageFetcher = { close: async () => undefined, fetchPage: (url) => (url.includes("/slow/") ? new Promise(() => undefined) : fetcher.fetchPage(url)) };
+    const output = await runBatch(
+      [
+        { id: "slow", jd: JD, company_url: `${site.origin}/slow/`, days: 2 },
+        { id: "fine", jd: JD, company_url: `${site.origin}/acme/`, days: 2 },
+      ],
+      { ...never, fetcher: slowFetcher, caseTimeoutMs: 300 },
+    );
+    expect(output.kits.map((k) => [k.id, k.status, k.error?.code ?? null])).toEqual([["slow", "failed", "TIMEOUT"], ["fine", "ok", null]]);
   });
 
   it("returns a valid empty result for an empty case list", async () => {

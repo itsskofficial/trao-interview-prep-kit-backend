@@ -100,3 +100,9 @@ Hacker News (Algolia API) and Stack Exchange Workplace, both keyless and open to
 - company-fit: only if something about the company was actually retrieved; its questions may stand without a requirement.
 
 So a company that publishes a take-home and a design round gets different calls with different instructions from one that says nothing, and a dead company URL gets no company-fit call at all. A typical kit costs seven model calls (extract, brief, up to four categories, flashcards) plus one per category with gaps. After extraction no step can fail the kit: a failed section leaves a note and an empty section, and if every question call failed, the coverage backstop would still cover every must-have.
+
+## 19. Two providers, and a batch that cannot hang
+
+`LLM_PROVIDER` picks who goes first; the other provider is used only if a key for it is set, when the first runs out of daily quota or fails outright. Evaluators can therefore run with whichever free key they have. Each provider has its own limiter, because their limits differ by an order of magnitude (Gemini Flash-Lite: 250K tokens/min; Groq: 8K).
+
+The batch runs two cases at a time, but it is the shared limiter that paces them: measured on the free tier, five fixture cases (37 model calls, 25 pages) take about 2 minutes 20 seconds whether run one or two at a time, because twelve requests a minute is the ceiling. Concurrency still helps when one case is waiting on a slow site. Each case has a 170-second budget and is recorded as `TIMEOUT` if it overruns, so one hung site cannot cost the fifteen minutes. Identical cases (same description, company and days) are researched once and share the result. Results are written in input order.

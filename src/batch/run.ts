@@ -1,58 +1,90 @@
+import { createHash } from "node:crypto";
 import { buildKit, type PipelineDeps } from "../pipeline/build-kit";
 import { PipelineError } from "../pipeline/errors";
-import { CaseInputSchema, type BatchOutput, type CaseResult } from "./schema";
+import { CaseInputSchema, type BatchOutput, type CaseInput, type CaseResult } from "./schema";
 
 export interface BatchDeps extends PipelineDeps {
+  /** Cases run at once. The model client's shared limiter is what actually paces them. */
+  concurrency?: number;
+  /** A case still running after this long is recorded as TIMEOUT so the rest of the run is not held up. */
+  caseTimeoutMs?: number;
   log?: (line: string) => void;
 }
 
+/** A case result before it is given its id, so identical cases can share one. */
+type Outcome = CaseResult extends infer Result ? (Result extends CaseResult ? Omit<Result, "id"> : never) : never;
+
 /**
  * Runs every case through the same pipeline the application uses. A case that
- * cannot produce a kit is recorded as failed and the run carries on.
+ * cannot produce a kit is recorded as failed and the run carries on. Results
+ * come back in input order, one per case, whatever order they finished in.
  */
 export async function runBatch(cases: unknown[], deps: BatchDeps): Promise<BatchOutput> {
-  const { log = () => undefined, now = () => new Date() } = deps;
-  const results: CaseResult[] = [];
+  const { concurrency = 2, caseTimeoutMs = 170_000, log = () => undefined, now = () => new Date() } = deps;
+  const results = new Array<CaseResult>(cases.length);
+  const inFlight = new Map<string, Promise<Outcome>>();
+  let next = 0;
+  let finished = 0;
 
-  for (const [index, entry] of cases.entries()) {
-    const id = caseId(entry, index);
-    const started = Date.now();
-    const result = await runCase(id, entry, deps);
-    results.push(result);
-    const outcome = result.status === "ok" ? "ok" : `failed (${result.error.code})`;
-    log(`[${index + 1}/${cases.length}] ${id}: ${outcome} in ${Math.round((Date.now() - started) / 1000)}s`);
+  async function worker(): Promise<void> {
+    while (next < cases.length) {
+      const index = next++;
+      const entry = cases[index];
+      const id = caseId(entry, index);
+      const started = Date.now();
+
+      const parsed = CaseInputSchema.safeParse(entry);
+      let outcome: Outcome;
+      if (!parsed.success) {
+        const message = parsed.error.issues.map((issue) => `${issue.path.join(".") || "case"}: ${issue.message}`).join("; ");
+        outcome = failure(new PipelineError("INVALID_INPUT", message));
+      } else {
+        // The same description, company and days submitted twice is researched once.
+        const key = fingerprint(parsed.data);
+        const running = inFlight.get(key) ?? runCase(parsed.data, deps, caseTimeoutMs);
+        inFlight.set(key, running);
+        outcome = await running;
+      }
+
+      results[index] = { id, ...outcome } as CaseResult;
+      const label = outcome.status === "ok" ? "ok" : `failed (${outcome.error.code})`;
+      log(`[${++finished}/${cases.length}] ${id}: ${label} in ${Math.round((Date.now() - started) / 1000)}s`);
+    }
   }
 
+  await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(cases.length, 1)) }, worker));
   return { version: "1.0", generated_at: now().toISOString(), kits: results };
 }
 
-async function runCase(id: string, entry: unknown, deps: BatchDeps): Promise<CaseResult> {
-  const parsed = CaseInputSchema.safeParse(entry);
-  if (!parsed.success) {
-    const message = parsed.error.issues.map((issue) => `${issue.path.join(".") || "case"}: ${issue.message}`).join("; ");
-    return failed(id, new PipelineError("INVALID_INPUT", message));
-  }
+async function runCase(input: CaseInput, deps: BatchDeps, timeoutMs: number): Promise<Outcome> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new PipelineError("TIMEOUT", `No kit after ${Math.round(timeoutMs / 1000)} seconds.`)), timeoutMs);
+  });
 
   try {
-    const { jd, company_url: companyUrl, days } = parsed.data;
-    const kit = await buildKit({ jd, companyUrl, days }, deps);
-    return { id, status: "ok", kit, error: null };
+    const kit = await Promise.race([buildKit({ jd: input.jd, companyUrl: input.company_url, days: input.days }, deps), timeout]);
+    return { status: "ok", kit, error: null };
   } catch (error) {
-    return failed(id, error);
+    return failure(error);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-function failed(id: string, error: unknown): CaseResult {
-  const known = error instanceof PipelineError;
+function failure(error: unknown): Outcome {
   return {
-    id,
     status: "failed",
     kit: null,
     error: {
-      code: known ? error.code : "INTERNAL",
+      code: error instanceof PipelineError ? error.code : "INTERNAL",
       message: error instanceof Error && error.message ? error.message : "Unexpected error.",
     },
   };
+}
+
+function fingerprint(input: CaseInput): string {
+  return createHash("sha256").update(JSON.stringify([input.jd.trim(), input.company_url.trim(), input.days])).digest("hex");
 }
 
 /** Results are keyed by the id we were given, even when the rest of the case is malformed. */
