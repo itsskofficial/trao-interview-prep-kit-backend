@@ -3,7 +3,8 @@ import { z } from "zod";
 /** Every environment variable the backend reads, in one place. Documented in .env.example. */
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  LLM_PROVIDER: z.enum(["gemini", "groq"]).default("gemini"),
+  // "offline" is a mechanical stand-in for local development and interface tests. It is refused in production.
+  LLM_PROVIDER: z.enum(["gemini", "groq", "offline"]).default("gemini"),
   GEMINI_API_KEY: z.string().default(""),
   GEMINI_MODEL: z.string().default("gemini-3.5-flash-lite"),
   // Defaults sit under the measured free-tier limits (15 requests/min, 250K tokens/min) to leave headroom.
@@ -39,6 +40,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const config = EnvSchema.parse(env);
   if (config.NODE_ENV === "production" && (config.JWT_SECRET === DEVELOPMENT_SECRET || config.JWT_SECRET.length < 32)) {
     throw new Error("JWT_SECRET must be set to a random value of at least 32 characters in production.");
+  }
+  if (config.NODE_ENV === "production" && config.LLM_PROVIDER === "offline") {
+    throw new Error("LLM_PROVIDER=offline is for local development and tests only.");
   }
   return config;
 }

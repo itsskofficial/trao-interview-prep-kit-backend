@@ -14,7 +14,8 @@
     "fixtures": "tsx fixtures/server.ts",
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
-    "selfcheck": "tsx scripts/selfcheck.ts"
+    "selfcheck": "tsx scripts/selfcheck.ts",
+    "dev:offline": "tsx scripts/dev-offline.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
