@@ -96,6 +96,8 @@ export const KitSchema = z.object({
   schedule: z.object({
     days_available: z.number().int().min(1),
     days: z.array(ScheduleDaySchema),
+    /** Extension: set when the user re-planned the remaining days around their weak spots. */
+    replan: z.object({ from_day: z.number().int().min(1), focus_question_ids: z.array(id) }).optional(),
   }),
   coverage: z.object({
     uncovered_requirement_ids: z.array(id),

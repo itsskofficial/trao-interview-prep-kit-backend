@@ -12,6 +12,7 @@ import { builderRouter } from "./builder";
 import { errorHandler, notFoundHandler } from "./errors";
 import { jobsRouter } from "./jobs";
 import { kitsRouter } from "./kits";
+import { practiceRouter } from "./practice";
 
 export interface AppDeps {
   db: Database;
@@ -37,7 +38,7 @@ export function createApp({ db, config, runner, regenerator }: AppDeps): Express
   });
 
   app.use("/api/auth", authRouter(db, config));
-  app.use("/api/kits", requireAuth(config), kitsRouter(kits), builderRouter(kits, regenerator));
+  app.use("/api/kits", requireAuth(config), kitsRouter(kits), builderRouter(kits, regenerator), practiceRouter(kits));
   app.use("/api/jobs", requireAuth(config), jobsRouter(db, kits, runner));
 
   app.use(notFoundHandler);

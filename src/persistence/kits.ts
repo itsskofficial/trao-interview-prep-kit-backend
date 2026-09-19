@@ -2,6 +2,7 @@ import { ObjectId, type Filter, type UpdateFilter } from "mongodb";
 import type { BuilderState } from "../builder/operations";
 import type { Kit } from "../kit/schema";
 import { validateKit } from "../kit/validate";
+import type { Progress } from "../practice/leitner";
 import type { Database, KitDoc } from "./mongo";
 
 export interface KitSummary {
@@ -54,6 +55,12 @@ export function kitRepository(db: Database) {
       const filter = owned(userId, id);
       const doc = filter && (await db.kits.findOne(filter));
       return doc ? toStored(doc) : undefined;
+    },
+
+    async practice(userId: ObjectId, id: string): Promise<{ kit: Kit; progress: Progress } | undefined> {
+      const filter = owned(userId, id);
+      const doc = filter && (await db.kits.findOne(filter));
+      return doc ? { kit: doc.kit, progress: doc.practice ?? {} } : undefined;
     },
 
     async findByFingerprint(userId: ObjectId, fingerprint: string): Promise<StoredKit | undefined> {
@@ -111,8 +118,8 @@ export type KitRepository = ReturnType<typeof kitRepository>;
 export interface KitChange {
   /** The new kit and counters. Omit to leave the kit itself untouched. */
   state?: BuilderState;
-  set?: Partial<Pick<KitDoc, "regeneration" | "undo">>;
-  unset?: Array<"regeneration" | "undo">;
+  set?: Partial<Pick<KitDoc, "regeneration" | "undo" | "practice">>;
+  unset?: Array<"regeneration" | "undo" | "practice">;
 }
 
 const MAX_SAVE_ATTEMPTS = 6;

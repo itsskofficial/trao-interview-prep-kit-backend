@@ -44,7 +44,13 @@ export function reconcile(kit: Kit): Kit {
   return {
     ...kit,
     coverage: { ...kit.coverage, uncovered_requirement_ids: findUncovered(kit.role.requirements, kit.questions).map((r) => r.id) },
-    schedule: allocateSchedule({ days: kit.schedule.days_available, questions: kit.questions, requirements: kit.role.requirements }),
+    schedule: allocateSchedule({
+      days: kit.schedule.days_available,
+      questions: kit.questions,
+      requirements: kit.role.requirements,
+      replan: kit.schedule.replan,
+      previousDays: kit.schedule.days,
+    }),
   };
 }
 

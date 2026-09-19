@@ -2,6 +2,7 @@ import { MongoClient, type Collection, type ObjectId } from "mongodb";
 import type { CaseError } from "../batch/schema";
 import type { Kit, Question, QuestionCategory } from "../kit/schema";
 import type { ProgressEvent } from "../pipeline/build-kit";
+import type { Progress } from "../practice/leitner";
 
 export interface UserDoc {
   _id: ObjectId;
@@ -31,6 +32,8 @@ export interface KitDoc {
   /** Present while a section is being regenerated, or after one failed. */
   regeneration?: RegenerationTarget & { status: "running" | "failed"; startedAt: Date; error?: string };
   undo?: UndoSnapshot;
+  /** Practice state per flashcard id. Kept beside the kit, not in it: it is the user's progress, not part of the kit's content. */
+  practice?: Progress;
   createdAt: Date;
   updatedAt: Date;
 }

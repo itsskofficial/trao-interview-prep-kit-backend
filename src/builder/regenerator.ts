@@ -109,7 +109,11 @@ export function createRegenerator(kits: KitRepository, pipeline: PipelineDeps): 
     async start(userId, kitId, request) {
       // The schedule is arithmetic: it is recomputed on the spot, with no model and nothing to wait for.
       if (request.section === "schedule") {
-        return kits.mutate(userId, kitId, (doc) => ({ state: { kit: reconcile(doc.kit), counters: doc.counters } }));
+        // Regenerating the schedule also drops any weak-spots re-plan: it is the way back to the default plan.
+        return kits.mutate(userId, kitId, (doc) => {
+          const { replan: _dropped, ...schedule } = doc.kit.schedule;
+          return { state: { kit: reconcile({ ...doc.kit, schedule }), counters: doc.counters } };
+        });
       }
 
       const { force = false, ...target } = request;

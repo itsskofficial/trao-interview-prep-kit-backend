@@ -12,10 +12,16 @@ const CATEGORY_LABEL: Record<Question["category"], string> = {
   "company-fit": "Company fit",
 };
 
+export type Replan = NonNullable<Kit["schedule"]["replan"]>;
+
 export interface ScheduleInput {
   days: number;
   questions: Question[];
   requirements: Requirement[];
+  /** Re-plan the days from `from_day` on, putting the focus questions first. Earlier days are kept as they were. */
+  replan?: Replan;
+  /** The schedule being replaced; needed to keep the days before `from_day`. */
+  previousDays?: ScheduleDay[];
 }
 
 /**
@@ -25,10 +31,26 @@ export interface ScheduleInput {
  * When there are more days than questions, the remaining days revisit the
  * material in the same priority order instead of sitting empty.
  */
-export function allocateSchedule({ days, questions, requirements }: ScheduleInput): Kit["schedule"] {
+export function allocateSchedule(input: ScheduleInput): Kit["schedule"] {
+  const { days, questions, requirements, replan, previousDays = [] } = input;
   if (!Number.isInteger(days) || days < 1) throw new RangeError(`days must be a positive integer, got ${days}`);
+  if (!replan) return { days_available: days, days: deal(rankQuestions(questions, requirements), days, requirements) };
 
-  const ranked = rankQuestions(questions, requirements);
+  // A re-plan keeps the days already behind the user and deals everything out again over the days that are left,
+  // weak spots first. Every question is still scheduled, so the schedule's guarantees hold.
+  const keep = Math.max(0, Math.min(replan.from_day - 1, days - 1, previousDays.length));
+  const existing = new Set(questions.map((question) => question.id));
+  const kept = previousDays.slice(0, keep).map((day, index) => ({ ...day, day: index + 1, question_ids: day.question_ids.filter((id) => existing.has(id)) }));
+  const rest = deal(focusFirst(questions, requirements, replan.focus_question_ids), days - keep, requirements);
+  return {
+    days_available: days,
+    days: [...kept, ...rest.map((day) => ({ ...day, day: day.day + keep }))],
+    replan: { from_day: keep + 1, focus_question_ids: replan.focus_question_ids.filter((id) => existing.has(id)) },
+  };
+}
+
+/** Deals an already ranked list of questions across exactly `days` days. */
+function deal(ranked: Question[], days: number, requirements: Requirement[]): ScheduleDay[] {
   const learningDays = Math.min(days, ranked.length);
   const schedule: ScheduleDay[] = [];
 
@@ -59,7 +81,14 @@ export function allocateSchedule({ days, questions, requirements }: ScheduleInpu
     schedule.push(buildDay(learningDays + index + 1, slice, requirements, "revise"));
   }
 
-  return { days_available: days, days: schedule };
+  return schedule;
+}
+
+/** The usual ranking, with the focus questions moved to the front in their ranked order. */
+function focusFirst(questions: Question[], requirements: Requirement[], focusIds: string[]): Question[] {
+  const focus = new Set(focusIds);
+  const ranked = rankQuestions(questions, requirements);
+  return [...ranked.filter((question) => focus.has(question.id)), ...ranked.filter((question) => !focus.has(question.id))];
 }
 
 export function rankQuestions(questions: Question[], requirements: Requirement[]): Question[] {
