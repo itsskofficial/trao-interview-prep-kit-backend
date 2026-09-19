@@ -11,3 +11,6 @@ coverage/
 kits*.json
 *.log
 .DS_Store
+
+# Development replay cache of model answers
+.llm-cache/

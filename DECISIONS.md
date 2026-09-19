@@ -21,3 +21,15 @@ The kit schema is defined once and used for model output, the assembled kit and 
 ## 5. Batch input is validated per case
 
 The input file is parsed as an array of unknowns and each entry is validated on its own, so one malformed case becomes one `failed` entry instead of aborting the run.
+
+## 6. Rate limits are respected before the call, not discovered from a 429
+
+A sliding one-minute limiter counts both requests and estimated tokens before anything is sent, with defaults set below the measured free-tier limits. When a 429 still arrives, the provider's own `Retry-After` wins over our backoff. A per-minute limit means wait; an exhausted per-day quota means fail over to the next provider, because waiting a minute will not help. The Gemini provider tells the two apart from the quota id in the error body.
+
+## 7. One repair attempt for invalid model output, then a structured error
+
+Output is parsed leniently (code fences and surrounding prose are tolerated) and then validated against the step's Zod schema. On failure the model is shown the exact validation issues once. A second failure raises `LLM_INVALID_OUTPUT`; the pipeline decides whether that step can degrade. Retrying more than once spends quota on a model that is unlikely to change its mind.
+
+## 8. Minimal thinking on Gemini
+
+`thinkingLevel: "minimal"` cut a structured call from about 13s to 3–8s in measurement. Extraction and drafting do not need long reasoning, and latency decides whether five cases fit in fifteen minutes.
