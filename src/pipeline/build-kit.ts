@@ -1,5 +1,6 @@
+import { closeCoverageGaps } from "../coverage/coverage";
 import { EmptyDescriptionError, extractRole } from "../extraction/extract";
-import { categoryFor, generateQuestions, type DraftQuestion } from "../generation/questions";
+import { categoryFor, generateQuestions, type DraftQuestion, type QuestionContext } from "../generation/questions";
 import { idAllocator } from "../kit/ids";
 import type { Kit, Question, QuestionCategory, Requirement } from "../kit/schema";
 import { validateKit } from "../kit/validate";
@@ -13,7 +14,7 @@ export interface PipelineInput {
   days: number;
 }
 
-export type PipelineStep = "extract" | "questions" | "schedule" | "validate";
+export type PipelineStep = "extract" | "questions" | "coverage" | "schedule" | "validate";
 
 export interface ProgressEvent {
   step: PipelineStep;
@@ -53,17 +54,32 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
   onProgress({ step: "questions", status: "started" });
   const nextQuestionId = idAllocator("q");
   const questions: Question[] = [];
-  for (const category of ["technical", "behavioural"] satisfies QuestionCategory[]) {
+  const context: QuestionContext = { roleTitle: role.title, seniority: role.seniority };
+  for (const category of REQUIREMENT_CATEGORIES) {
     const requirements = role.requirements.filter((r) => categoryFor(r) === category);
-    const drafts = await generateQuestions(
-      { category, requirements, context: { roleTitle: role.title, seniority: role.seniority } },
-      llm,
-    ).catch((error: unknown) => degrade(error, `${category} questions`, notes));
+    const drafts = await generateQuestions({ category, requirements, context }, llm).catch((error: unknown) =>
+      degrade(error, `${category} questions`, notes),
+    );
     questions.push(...drafts.map((draft) => ({ id: nextQuestionId(), ...draft })));
   }
   onProgress({ step: "questions", status: "done", detail: `${questions.length} questions` });
 
-  // 3. Schedule: arithmetic, never the model.
+  // 3. Second pass. Code finds the requirements no question covers, the model is asked for
+  //    those only, and code checks again. Must-haves still open get a question written by code.
+  onProgress({ step: "coverage", status: "started" });
+  const coverage = await closeCoverageGaps(role.requirements, questions, (gaps) => generateForGaps(gaps, context, llm));
+  questions.push(...coverage.added.map((draft) => ({ id: nextQuestionId(), ...draft })));
+  const fallbacks = coverage.added.filter((q) => q.origin === "fallback").length;
+  if (fallbacks > 0) {
+    notes.push(`${fallbacks} must-have requirement(s) got a standard question written by the application because the model did not cover them.`);
+  }
+  onProgress({
+    step: "coverage",
+    status: "done",
+    detail: `${coverage.passes} pass(es), ${coverage.added.length} question(s) added, ${coverage.uncovered.length} nice-to-have uncovered`,
+  });
+
+  // 4. Schedule: arithmetic, never the model.
   onProgress({ step: "schedule", status: "started" });
   const schedule = allocateSchedule({ days: input.days, questions, requirements: role.requirements });
   onProgress({ step: "schedule", status: "done" });
@@ -88,13 +104,13 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
     questions,
     flashcards: [],
     schedule,
-    coverage: { uncovered_requirement_ids: uncoveredIds(role.requirements, questions), passes: 1 },
+    coverage: { uncovered_requirement_ids: coverage.uncovered.map((r) => r.id), passes: coverage.passes },
     hiring_stages: [],
     research_log: [],
     notes,
   };
 
-  // 4. Nothing leaves the pipeline without passing the structure check.
+  // 5. Nothing leaves the pipeline without passing the structure check.
   onProgress({ step: "validate", status: "started" });
   const validation = validateKit(kit);
   if (!validation.ok) {
@@ -105,9 +121,17 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
   return validation.kit;
 }
 
-function uncoveredIds(requirements: Requirement[], questions: Array<Pick<DraftQuestion, "requirement_ids">>): string[] {
-  const covered = new Set(questions.flatMap((q) => q.requirement_ids));
-  return requirements.filter((r) => !covered.has(r.id)).map((r) => r.id);
+/** Categories whose questions are driven by requirements. */
+const REQUIREMENT_CATEGORIES = ["technical", "behavioural"] satisfies QuestionCategory[];
+
+/** Gap questions still come from the right kind of call: technical gaps and behavioural gaps are asked separately. */
+async function generateForGaps(gaps: Requirement[], context: QuestionContext, llm: LlmClient): Promise<DraftQuestion[]> {
+  const drafts: DraftQuestion[] = [];
+  for (const category of REQUIREMENT_CATEGORIES) {
+    const requirements = gaps.filter((r) => categoryFor(r) === category);
+    drafts.push(...(await generateQuestions({ category, requirements, context, closingGaps: true }, llm)));
+  }
+  return drafts;
 }
 
 /** A generation step that fails costs its section, not the kit. A model that is down entirely still fails the case. */

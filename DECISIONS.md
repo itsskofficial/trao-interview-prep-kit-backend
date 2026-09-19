@@ -49,3 +49,11 @@ No model is involved. Questions are ranked must-have first, then hardest first, 
 ## 12. One pipeline entry point, and sections degrade before the kit does
 
 `buildKit` is the only path from a description to a kit; the API and `npm run evaluate` both call it. Inside it, a failed generation step costs its own section and leaves a note in the kit, while a model that is unavailable on every provider fails the case, because then there is no kit to give. Nothing leaves the pipeline without passing `validateKit`. The batch output file is written to a temporary name and renamed, so a crash cannot leave a half-written result.
+
+## 13. The second pass: how many, when to stop, and a guarantee that does not depend on the model
+
+Coverage is set arithmetic in code: a requirement is covered if some question lists its id. After the first draft, code finds the gaps and asks the model for questions covering those requirements only, by category, then checks again. `coverage.passes` counts checks, so a clean first draft is 1 and one gap-closing round is 2.
+
+The loop stops on the first of: no must-have uncovered; a pass that closed nothing (asking the same model the same question again spends quota for the same answer); three checks. Three is enough because in practice a targeted "write one question for each of these" closes every gap in one round, and the free tier allows only ten calls per kit. Nice-to-have gaps get one attempt and are then reported in `uncovered_requirement_ids` rather than forced.
+
+If a must-have is still uncovered after that, code writes a plain question from the requirement text, marked `origin: "fallback"`, and the kit notes it. The brief says a kit with an uncovered must-have "has failed at the one job it had", so that guarantee is enforced by code. A model error during gap-closing is treated as a pass that closed nothing, so it ends in fallbacks rather than a failed kit.

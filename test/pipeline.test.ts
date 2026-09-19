@@ -95,7 +95,7 @@ describe("buildKit", () => {
     const events: ProgressEvent[] = [];
     const llm = fakeLlmClient([fakeProvider([extraction, oneQuestionPerRequirement, oneQuestionPerRequirement])]);
     await buildKit(input, { llm, now: NOW, onProgress: (event) => events.push(event) });
-    expect(events.filter((e) => e.status === "done").map((e) => e.step)).toEqual(["extract", "questions", "schedule", "validate"]);
+    expect(events.filter((e) => e.status === "done").map((e) => e.step)).toEqual(["extract", "questions", "coverage", "schedule", "validate"]);
   });
 });
 
@@ -137,5 +137,37 @@ describe("runBatch", () => {
   it("returns a valid empty result for an empty case list", async () => {
     const output = await runBatch([], { llm: fakeLlmClient([fakeProvider([])]), now: NOW });
     expect(output).toEqual({ version: "1.0", generated_at: "2026-09-19T12:00:00.000Z", kits: [] });
+  });
+});
+
+describe("buildKit second pass", () => {
+  const onlyFirstRequirement = (request: ProviderRequest) => {
+    const first = /^(r\d+) \[/m.exec(request.prompt)![1]!;
+    return { questions: [{ requirement_ids: [first], prompt: `Only ${first}`, answer_outline: "O", difficulty: 2 }] };
+  };
+
+  it("closes a gap the first draft left: the model is asked for the missed requirements only", async () => {
+    // First technical call covers r1 only, leaving r2 (must) and r4 (nice) uncovered.
+    const provider = fakeProvider([extraction, onlyFirstRequirement, oneQuestionPerRequirement, oneQuestionPerRequirement]);
+    const kit = await buildKit(input, { llm: fakeLlmClient([provider]), now: NOW });
+
+    const gapCall = provider.requests[3]!;
+    expect(gapCall.prompt).toContain("have no question yet");
+    expect(gapCall.prompt).toContain("r2 [must]");
+    expect(gapCall.prompt).not.toContain("r1 [must]");
+    expect(kit.coverage).toEqual({ uncovered_requirement_ids: [], passes: 2 });
+    expect(validateKit(kit)).toMatchObject({ ok: true });
+  });
+
+  it("writes the question itself when the model never covers a must-have", async () => {
+    const nothing = { questions: [] };
+    const provider = fakeProvider([extraction, onlyFirstRequirement, oneQuestionPerRequirement, nothing]);
+    const kit = await buildKit(input, { llm: fakeLlmClient([provider]), now: NOW });
+
+    const fallback = kit.questions.filter((q) => q.origin === "fallback");
+    expect(fallback.map((q) => q.requirement_ids)).toEqual([["r2"]]);
+    expect(kit.coverage.uncovered_requirement_ids).toEqual(["r4"]);
+    expect(kit.schedule.days.flatMap((d) => d.question_ids)).toContain(fallback[0]!.id);
+    expect(kit.notes!.join(" ")).toContain("written by the application");
   });
 });
