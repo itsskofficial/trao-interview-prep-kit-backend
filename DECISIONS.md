@@ -45,3 +45,7 @@ Bonus phrases are checked before required phrases, and scope narrows from the ev
 ## 11. The schedule is a ranking dealt out across days
 
 No model is involved. Questions are ranked must-have first, then hardest first, then original order, and that ranking is cut into contiguous slices across exactly the requested days, leftovers going to the earliest days. So the hardest must-have material is day 1 and the last day is the easiest nice-to-have material. Every question is scheduled, which means every covered must-have requirement appears. Minutes are 10, 15 or 20 per question by difficulty, with a 30-minute floor per day, so they are always integers. With more days than questions (a 60-day schedule), the extra days are revision days that walk the same ranking again at half the time per question, rather than sitting empty or spreading one question a day thinly to the end. With zero questions every day still exists and says so.
+
+## 12. One pipeline entry point, and sections degrade before the kit does
+
+`buildKit` is the only path from a description to a kit; the API and `npm run evaluate` both call it. Inside it, a failed generation step costs its own section and leaves a note in the kit, while a model that is unavailable on every provider fails the case, because then there is no kit to give. Nothing leaves the pipeline without passing `validateKit`. The batch output file is written to a temporary name and renamed, so a crash cannot leave a half-written result.

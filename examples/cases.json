@@ -1,0 +1,20 @@
+[
+  {
+    "id": "case-01",
+    "jd": "Senior Backend Engineer\n\nAcme Logistics builds route-planning software for couriers. Remote (EU).\n\nWhat you'll do\n- Own the routing service end to end\n- Mentor junior engineers\n\nRequirements\n- 5+ years building services with Node.js\n- Strong SQL and PostgreSQL experience\n- Experience designing event-driven systems\n- Experience mentoring junior engineers\n\nNice to have\n- Exposure to Kubernetes\n- GraphQL",
+    "company_url": "http://localhost:8099/acme/",
+    "days": 5
+  },
+  {
+    "id": "case-02",
+    "jd": "Frontend dev needed ASAP.\nReact required, Tailwind a plus.",
+    "company_url": "http://localhost:8099/no-such-company/",
+    "days": 1
+  },
+  {
+    "id": "case-03",
+    "jd": "",
+    "company_url": "http://localhost:8099/acme/",
+    "days": 3
+  }
+]
