@@ -44,7 +44,10 @@ export type Config = z.infer<typeof EnvSchema>;
 const DEVELOPMENT_SECRET = "development-only-secret-change-me";
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const config = EnvSchema.parse(env);
+  // A variable left blank ("CASE_TIMEOUT_MS=") means "not set", exactly as it reads in .env.example.
+  // Without this, a blank number would be coerced to 0 and refused.
+  const set = Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined && value.trim() !== ""));
+  const config = EnvSchema.parse(set);
   if (config.NODE_ENV === "production" && (config.JWT_SECRET === DEVELOPMENT_SECRET || config.JWT_SECRET.length < 32)) {
     throw new Error("JWT_SECRET must be set to a random value of at least 32 characters in production.");
   }

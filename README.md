@@ -208,7 +208,7 @@ Two smaller additions: **undo for a regeneration**, because losing a generated q
 ## 13. Testing
 
 ```bash
-npm test                # 324 tests, no network, no live model
+npm test                # 329 tests, no network, no live model
 npm run typecheck
 npm run selfcheck       # live model, scored against the published rubric (about 40 requests)
 ```
