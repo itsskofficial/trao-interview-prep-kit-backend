@@ -1,0 +1,25 @@
+# Render blueprint: New > Blueprint > pick this repository. Render asks for the three values marked
+# "sync: false" and generates JWT_SECRET itself.
+services:
+  - type: web
+    name: trao-interview-prep-kit-backend
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: MONGODB_URI
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
