@@ -11,17 +11,22 @@ import type { KitRepository, StoredKit } from "../persistence/kits";
 import { ApiError, parse } from "./errors";
 import type { UsageLimiter } from "./limits";
 
-const text = (max: number) => z.string().trim().max(max, `At most ${max} characters.`);
+/**
+ * Text as the user typed it. It is deliberately not trimmed: the interface shows the server's copy of
+ * the kit once a save lands, and trimming would delete the space someone has just typed before their next word.
+ */
+const text = (max: number) => z.string().max(max, `At most ${max} characters.`);
+const notBlank = (message: string) => [(value: string) => value.trim().length > 0, message] as const;
 const requirementIds = z.array(z.string().min(1)).max(50);
 const difficulty = z.number().int().min(1).max(3);
 
 const QuestionPatchSchema = z
-  .object({ prompt: text(2_000).min(1, "A question needs a prompt."), answer_outline: text(6_000), difficulty, requirement_ids: requirementIds })
+  .object({ prompt: text(2_000).refine(...notBlank("A question needs a prompt.")), answer_outline: text(6_000), difficulty, requirement_ids: requirementIds })
   .partial()
   .refine((patch) => Object.keys(patch).length > 0, "Nothing to change.");
 const NewQuestionSchema = z.object({
   category: QuestionCategorySchema,
-  prompt: text(2_000).min(1, "A question needs a prompt."),
+  prompt: text(2_000).trim().refine(...notBlank("A question needs a prompt.")),
   answer_outline: text(6_000).optional(),
   difficulty: difficulty.optional(),
   requirement_ids: requirementIds.optional(),
@@ -30,10 +35,10 @@ const MoveSchema = z.object({ category: QuestionCategorySchema, index: z.number(
 const QuestionOrderSchema = z.object({ category: QuestionCategorySchema, ids: z.array(z.string()).max(500) });
 
 const FlashcardPatchSchema = z
-  .object({ front: text(500).min(1, "A flashcard needs a front."), back: text(3_000), requirement_ids: requirementIds })
+  .object({ front: text(500).refine(...notBlank("A flashcard needs a front.")), back: text(3_000), requirement_ids: requirementIds })
   .partial()
   .refine((patch) => Object.keys(patch).length > 0, "Nothing to change.");
-const NewFlashcardSchema = z.object({ front: text(500).min(1, "A flashcard needs a front."), back: text(3_000).optional(), requirement_ids: requirementIds.optional() });
+const NewFlashcardSchema = z.object({ front: text(500).trim().refine(...notBlank("A flashcard needs a front.")), back: text(3_000).optional(), requirement_ids: requirementIds.optional() });
 const FlashcardOrderSchema = z.object({ ids: z.array(z.string()).max(500) });
 
 const BriefPatchSchema = z

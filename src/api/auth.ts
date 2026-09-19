@@ -104,7 +104,12 @@ export function authRouter(db: Database, config: Config): Router {
 
   router.get("/me", requireAuth(config), async (_request, response) => {
     const user = await db.users.findOne({ _id: response.locals.userId as ObjectId });
-    if (!user) throw new ApiError(401, "UNAUTHENTICATED", "Sign in to continue.");
+    if (!user) {
+      // A valid token for an account that no longer exists. Clear it, or the interface's route guard,
+      // which only sees that a cookie is present, would keep sending the visitor back into the app.
+      response.clearCookie(COOKIE, { ...cookieOptions(config), maxAge: undefined });
+      throw new ApiError(401, "UNAUTHENTICATED", "Sign in to continue.");
+    }
     response.json({ user: publicUser(user) });
   });
 
