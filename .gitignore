@@ -17,3 +17,6 @@ kits*.json
 
 # Saved output of the last live self-check
 .selfcheck/
+
+# In-memory MongoDB binaries, if a run ever downloads them here
+mongodb-binaries/

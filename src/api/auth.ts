@@ -88,7 +88,7 @@ export function authRouter(db: Database, config: Config): Router {
   });
 
   router.post("/login", limiter, async (request, response) => {
-    const { email, password } = parse(CredentialsSchema.extend({ password: z.string().min(1).max(72) }), request.body);
+    const { email, password } = parse(CredentialsSchema.extend({ password: z.string().min(1, "Enter your password.").max(72) }), request.body);
     const user = await db.users.findOne({ email });
     const matches = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
     if (!user || !matches) throw new ApiError(401, "INVALID_CREDENTIALS", "Email or password is incorrect.");
