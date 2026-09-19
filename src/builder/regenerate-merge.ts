@@ -1,7 +1,7 @@
 import { fallbackQuestion, findUncovered } from "../coverage/coverage";
 import { normalise } from "../extraction/evidence";
 import type { DraftQuestion } from "../generation/questions";
-import type { Kit, Question, QuestionCategory } from "../kit/schema";
+import type { Question, QuestionCategory } from "../kit/schema";
 import { isProtected, reconcile, type BuilderState } from "./operations";
 
 export interface MergeResult {
@@ -89,9 +89,4 @@ export function undoRegeneratedQuestions(state: BuilderState, category: Question
   const at = lastInCategory === -1 ? kept.length : lastInCategory + 1;
   const questions = [...kept.slice(0, at), ...restore, ...kept.slice(at)];
   return { ...state, kit: reconcile({ ...kit, questions }) };
-}
-
-/** A brief the user has edited or pinned is only replaced when they explicitly say so. */
-export function mergeRegeneratedBrief(kit: Kit, brief: Kit["company_brief"], extras: Pick<Kit, "hiring_stages" | "interview_insights">): Kit {
-  return { ...kit, company_brief: { ...brief, origin: "generated" }, ...extras };
 }

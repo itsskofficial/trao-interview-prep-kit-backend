@@ -1,6 +1,6 @@
 import { MongoClient, type Collection, type ObjectId } from "mongodb";
 import type { CaseError } from "../batch/schema";
-import type { Kit } from "../kit/schema";
+import type { Kit, Question, QuestionCategory } from "../kit/schema";
 import type { ProgressEvent } from "../pipeline/build-kit";
 
 export interface UserDoc {
@@ -9,6 +9,13 @@ export interface UserDoc {
   passwordHash: string;
   createdAt: Date;
 }
+
+export type RegenerationTarget = { section: "brief" } | { section: "questions"; category: QuestionCategory };
+
+/** What the last regeneration replaced, kept so it can be put back. Only the most recent one is kept. */
+export type UndoSnapshot =
+  | { section: "questions"; category: QuestionCategory; removed: Question[]; addedIds: string[]; at: Date }
+  | { section: "brief"; previous: Pick<Kit, "company_brief" | "hiring_stages" | "interview_insights">; at: Date };
 
 export interface KitDoc {
   _id: ObjectId;
@@ -19,6 +26,11 @@ export interface KitDoc {
   fingerprint: string;
   /** Highest number ever used for each id prefix, so an id is never reused after a delete. */
   counters: { q: number; f: number };
+  /** Goes up by one on every save. A save only succeeds against the version it read, so two writers cannot overwrite each other. */
+  version: number;
+  /** Present while a section is being regenerated, or after one failed. */
+  regeneration?: RegenerationTarget & { status: "running" | "failed"; startedAt: Date; error?: string };
+  undo?: UndoSnapshot;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -52,7 +64,11 @@ export interface Database {
 }
 
 export async function connectDatabase(uri: string, name: string): Promise<Database> {
-  const client = await MongoClient.connect(uri, { serverSelectionTimeoutMS: 8_000 });
+  const client = await MongoClient.connect(uri, {
+    serverSelectionTimeoutMS: 8_000,
+    // Without this an optional field set to `undefined` is stored as `null`, and a kit read back would fail its own schema.
+    ignoreUndefined: true,
+  });
   const db = client.db(name);
   const database: Database = {
     users: db.collection<UserDoc>("users"),

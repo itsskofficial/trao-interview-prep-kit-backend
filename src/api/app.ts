@@ -2,11 +2,13 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import express, { type Express } from "express";
 import helmet from "helmet";
+import type { Regenerator } from "../builder/regenerator";
 import type { Config } from "../config";
 import type { JobRunner } from "../jobs/runner";
 import { kitRepository } from "../persistence/kits";
 import type { Database } from "../persistence/mongo";
 import { authRouter, requireAuth } from "./auth";
+import { builderRouter } from "./builder";
 import { errorHandler, notFoundHandler } from "./errors";
 import { jobsRouter } from "./jobs";
 import { kitsRouter } from "./kits";
@@ -15,9 +17,10 @@ export interface AppDeps {
   db: Database;
   config: Config;
   runner: JobRunner;
+  regenerator: Regenerator;
 }
 
-export function createApp({ db, config, runner }: AppDeps): Express {
+export function createApp({ db, config, runner, regenerator }: AppDeps): Express {
   const app = express();
   const kits = kitRepository(db);
   app.disable("x-powered-by");
@@ -34,7 +37,7 @@ export function createApp({ db, config, runner }: AppDeps): Express {
   });
 
   app.use("/api/auth", authRouter(db, config));
-  app.use("/api/kits", requireAuth(config), kitsRouter(kits));
+  app.use("/api/kits", requireAuth(config), kitsRouter(kits), builderRouter(kits, regenerator));
   app.use("/api/jobs", requireAuth(config), jobsRouter(db, kits, runner));
 
   app.use(notFoundHandler);
