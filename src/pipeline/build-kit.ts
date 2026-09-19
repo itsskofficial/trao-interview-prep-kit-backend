@@ -5,6 +5,8 @@ import { idAllocator } from "../kit/ids";
 import type { Kit, Question, QuestionCategory, Requirement } from "../kit/schema";
 import { validateKit } from "../kit/validate";
 import { LlmError, type LlmClient } from "../llm/types";
+import { crawlCompanySite, type CrawledPage } from "../retrieval/crawl";
+import type { PageFetcher } from "../retrieval/fetcher";
 import { allocateSchedule } from "../scheduling/allocate";
 import { PipelineError } from "./errors";
 
@@ -14,7 +16,7 @@ export interface PipelineInput {
   days: number;
 }
 
-export type PipelineStep = "extract" | "questions" | "coverage" | "schedule" | "validate";
+export type PipelineStep = "extract" | "crawl" | "questions" | "coverage" | "schedule" | "validate";
 
 export interface ProgressEvent {
   step: PipelineStep;
@@ -24,6 +26,7 @@ export interface ProgressEvent {
 
 export interface PipelineDeps {
   llm: LlmClient;
+  fetcher: PageFetcher;
   now?: () => Date;
   onProgress?: (event: ProgressEvent) => void;
 }
@@ -33,7 +36,7 @@ export interface PipelineDeps {
  * command both call this; there is no second implementation.
  */
 export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promise<Kit> {
-  const { llm, now = () => new Date(), onProgress = () => undefined } = deps;
+  const { llm, fetcher, now = () => new Date(), onProgress = () => undefined } = deps;
   const notes: string[] = [];
 
   // 1. Extract. Pasted text needs no retrieval.
@@ -50,7 +53,23 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
     );
   }
 
-  // 2. Questions, one call per category that has requirements.
+  // 2. Crawl the company site. A homepage is only useful once its links have been ranked and followed.
+  //    A site that cannot be read costs the research, not the kit.
+  onProgress({ step: "crawl", status: "started" });
+  const crawl = await crawlCompanySite(input.companyUrl, fetcher);
+  if (!crawl.reachable) {
+    notes.push(`The company site could not be read (${crawl.failure}) so this kit is based on the job description alone.`);
+  } else if (!crawl.hiring) {
+    notes.push("The company site does not publish how it hires, so the questions are not tailored to a known interview format.");
+  }
+  const researchPages = [crawl.home, crawl.about, crawl.hiring].filter((page): page is CrawledPage => Boolean(page?.text));
+  onProgress({
+    step: "crawl",
+    status: crawl.reachable ? "done" : "failed",
+    detail: crawl.reachable ? `${crawl.pages.length} page(s) read, hiring page ${crawl.hiring ? "found" : "not found"}` : crawl.failure,
+  });
+
+  // 3. Questions, one call per category that has requirements.
   onProgress({ step: "questions", status: "started" });
   const nextQuestionId = idAllocator("q");
   const questions: Question[] = [];
@@ -64,7 +83,7 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
   }
   onProgress({ step: "questions", status: "done", detail: `${questions.length} questions` });
 
-  // 3. Second pass. Code finds the requirements no question covers, the model is asked for
+  // 4. Second pass. Code finds the requirements no question covers, the model is asked for
   //    those only, and code checks again. Must-haves still open get a question written by code.
   onProgress({ step: "coverage", status: "started" });
   const coverage = await closeCoverageGaps(role.requirements, questions, (gaps) => generateForGaps(gaps, context, llm));
@@ -79,20 +98,20 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
     detail: `${coverage.passes} pass(es), ${coverage.added.length} question(s) added, ${coverage.uncovered.length} nice-to-have uncovered`,
   });
 
-  // 4. Schedule: arithmetic, never the model.
+  // 5. Schedule: arithmetic, never the model.
   onProgress({ step: "schedule", status: "started" });
   const schedule = allocateSchedule({ days: input.days, questions, requirements: role.requirements });
   onProgress({ step: "schedule", status: "done" });
 
   const kit: Kit = {
     source: {
-      company: role.company,
+      company: role.company || crawl.siteName,
       company_url: input.companyUrl,
       role: role.title,
       location: role.location,
       jd_chars: input.jd.length,
       researched_at: now().toISOString(),
-      pages_used: [],
+      pages_used: researchPages.map((page) => page.url),
     },
     company_brief: { summary: "", what_they_do: "", sources: [] },
     role: {
@@ -106,11 +125,11 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
     schedule,
     coverage: { uncovered_requirement_ids: coverage.uncovered.map((r) => r.id), passes: coverage.passes },
     hiring_stages: [],
-    research_log: [],
+    research_log: crawl.log,
     notes,
   };
 
-  // 5. Nothing leaves the pipeline without passing the structure check.
+  // 6. Nothing leaves the pipeline without passing the structure check.
   onProgress({ step: "validate", status: "started" });
   const validation = validateKit(kit);
   if (!validation.ok) {

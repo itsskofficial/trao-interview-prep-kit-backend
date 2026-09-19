@@ -69,3 +69,13 @@ The fetcher never throws: every problem is a typed skip reason (`invalid_url`, `
 - **Cleaning.** Scripts, styles, forms, comments and anything hidden by attribute or inline style are removed before text is taken, since that is where text aimed at a model gets planted. Links are collected first, with the region they were found in (nav, header, footer, body), and resolved against the page URL or its `<base>`, never against an assumed host.
 
 Known limitation: pages that render only with JavaScript yield little text, because no browser is run. A hosted scraper was ruled out: it cannot reach a site served from the evaluator's localhost, and it would require a third API key.
+
+## 15. Finding the hiring page: rank links, then let the page's own text decide
+
+No path is assumed. Every same-origin link is scored in code from its anchor text (what the company chose to call the page), the words in its path, where it sits (navigation and footers get a point, since that is where Careers and About live) and its depth. Words about interviewing and hiring score highest, careers and jobs next, then handbook, people, culture and engineering pages, which are rarely the answer but are often one click from it. Legal pages, logins and files are dropped. The crawler always fetches the best-scoring unvisited link next, to depth two, within twelve pages, on the company's origin only. `sitemap.xml` beside the company URL is read when present and its entries are ranked the same way.
+
+A link called "Careers" proves nothing, so a page counts as the hiring page only if its own text describes a process: at least three distinct process terms (recruiter, take-home, system design, on-site, final round, offer...) and one unambiguous anchor term such as "interview", because "round" and "stage" also describe funding. Links found on such a page inherit part of its score, which is how a vaguely named "What to expect" page two clicks down gets fetched. The crawl stops early once it has an unmistakable process page and an about page.
+
+If the company URL itself fails, the site is recorded as unreachable. There is no fallback to the origin root: when several companies are served under one origin (as the evaluation fixtures may be), the root is a different site, and a brief about the wrong company is worse than an honest "could not be read".
+
+The repository ships five fixture companies under `fixtures/sites` that mirror the published test set: a process two clicks deep at an unguessable path, a site with no hiring page, a process inside a blog post next to a JavaScript-only careers page and a robots-disallowed section, pages with planted instructions, and a site whose careers page answers 500.

@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "evaluate": "tsx src/cli/evaluate.ts"
+    "evaluate": "tsx src/cli/evaluate.ts",
+    "fixtures": "tsx fixtures/server.ts"
   },
   "dependencies": {
     "cheerio": "^1.2.0",

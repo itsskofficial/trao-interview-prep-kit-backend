@@ -3,8 +3,9 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { runBatch } from "../batch/run";
 import { BatchInputSchema } from "../batch/schema";
-import { loadConfig, loadEnvFile } from "../config";
+import { allowsPrivateUrls, loadConfig, loadEnvFile } from "../config";
 import { createLlmClientFromConfig } from "../llm";
+import { createPageFetcher } from "../retrieval/fetcher";
 
 const USAGE = "Usage: npm run evaluate -- --input <cases.json> --output <kits.json>";
 
@@ -32,7 +33,8 @@ async function main(): Promise<number> {
   });
 
   console.error(`Running ${cases.length} case(s) with ${config.LLM_PROVIDER}...`);
-  const output = await runBatch(cases, { llm, log: (line) => console.error(line) });
+  const fetcher = createPageFetcher({ allowPrivate: allowsPrivateUrls(config) });
+  const output = await runBatch(cases, { llm, fetcher, log: (line) => console.error(line) }).finally(() => fetcher.close());
 
   // Write to a temporary file first so a crash never leaves a half-written result.
   const target = path.resolve(values.output);
