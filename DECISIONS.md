@@ -41,3 +41,7 @@ The model returns each requirement with a verbatim `evidence` quote. Code then: 
 ## 10. Must or nice is decided by wording, in a fixed order
 
 Bonus phrases are checked before required phrases, and scope narrows from the evidence, to its sentence, to the heading above it. So "Rust is a plus" under a Requirements heading is nice, "a work permit is required" under Nice to have is must, and a one-line stub ("Required: React. Bonus: GraphQL.") is split by sentence. Loose phrases like "you have" count only in headings. The model's label is the last resort.
+
+## 11. The schedule is a ranking dealt out across days
+
+No model is involved. Questions are ranked must-have first, then hardest first, then original order, and that ranking is cut into contiguous slices across exactly the requested days, leftovers going to the earliest days. So the hardest must-have material is day 1 and the last day is the easiest nice-to-have material. Every question is scheduled, which means every covered must-have requirement appears. Minutes are 10, 15 or 20 per question by difficulty, with a 30-minute floor per day, so they are always integers. With more days than questions (a 60-day schedule), the extra days are revision days that walk the same ranking again at half the time per question, rather than sitting empty or spreading one question a day thinly to the end. With zero questions every day still exists and says so.
