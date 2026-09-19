@@ -84,15 +84,23 @@ describe("page fetcher", () => {
     expect(await localFetcher().fetchPage(`${site.origin}/logo.png`)).toMatchObject({ ok: false, reason: "unsupported_content_type" });
   });
 
-  it("stops reading a body that is larger than the limit, even without a Content-Length", async () => {
+  it("reads a very long page up to the limit and uses what it got, even without a Content-Length", async () => {
     site = await startSite({
       "/huge": (_request, response) => {
         response.writeHead(200, { "content-type": "text/html" });
+        response.write("<h1>Acme</h1><p>What we do is near the top.</p>");
         for (let i = 0; i < 50; i++) response.write("x".repeat(10_000));
         response.end();
       },
     });
-    expect(await localFetcher({ maxBytes: 100_000 }).fetchPage(`${site.origin}/huge`)).toMatchObject({ ok: false, reason: "too_large" });
+    const result = await localFetcher({ maxBytes: 100_000 }).fetchPage(`${site.origin}/huge`);
+    expect(result.ok && result.body.length).toBe(100_000);
+    expect(result.ok && result.body).toContain("What we do is near the top.");
+  });
+
+  it("does not start on something that announces itself as enormous", async () => {
+    site = await startSite({ "/dump": { headers: { "content-type": "text/html", "content-length": "900000" }, body: "" } });
+    expect(await localFetcher({ maxBytes: 100_000 }).fetchPage(`${site.origin}/dump`)).toMatchObject({ ok: false, reason: "too_large" });
   });
 
   it("honours robots.txt, and reads it once per site", async () => {

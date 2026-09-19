@@ -65,7 +65,7 @@ export function createPageFetcher(options: FetcherOptions): PageFetcher {
   const {
     allowPrivate,
     timeoutMs = 10_000,
-    maxBytes = 1_500_000,
+    maxBytes = 3_000_000,
     maxRedirects = 5,
     minDelayMs = 1_000,
     localDelayMs = 25,
@@ -132,21 +132,26 @@ export function createPageFetcher(options: FetcherOptions): PageFetcher {
       await response.body?.cancel().catch(() => undefined);
       return { ok: false, url: url.href, reason: "unsupported_content_type", detail: contentType || "no content type" };
     }
-    if (Number(response.headers.get("content-length")) > maxBytes) {
+    // Something that announces itself as enormous is not a page worth starting on.
+    if (Number(response.headers.get("content-length")) > maxBytes * 4) {
       await response.body?.cancel().catch(() => undefined);
-      return { ok: false, url: url.href, reason: "too_large", detail: `More than ${maxBytes} bytes.` };
+      return { ok: false, url: url.href, reason: "too_large", detail: `More than ${maxBytes * 4} bytes.` };
     }
 
-    // Content-Length can be missing or wrong, so the limit is enforced while reading.
+    // Modern marketing pages are often several megabytes of markup, with the words a person reads near the
+    // top. So a long page is read up to the limit and used as far as it got, rather than thrown away.
+    // Content-Length can be missing or wrong, which is why the limit is enforced while reading.
     const chunks: Uint8Array[] = [];
     let received = 0;
     try {
       for await (const chunk of response.body ?? []) {
-        received += chunk.byteLength;
-        if (received > maxBytes) {
+        const room = maxBytes - received;
+        if (chunk.byteLength >= room) {
+          chunks.push(chunk.subarray(0, room));
           await response.body?.cancel().catch(() => undefined);
-          return { ok: false, url: url.href, reason: "too_large", detail: `More than ${maxBytes} bytes.` };
+          break;
         }
+        received += chunk.byteLength;
         chunks.push(chunk);
       }
     } catch (error) {

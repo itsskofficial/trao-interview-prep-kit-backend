@@ -4,8 +4,8 @@
 
 Turns a job description, a company website and a number of days into a structured interview preparation kit: a company brief, a role breakdown, a categorised question bank, flashcards and a day-by-day schedule. This repository holds the research and generation pipeline, the HTTP API and the batch command. The interface is in [trao-interview-prep-kit-frontend](https://github.com/itsskofficial/trao-interview-prep-kit-frontend).
 
-- **Live app:** <!-- LIVE_FRONTEND -->_added after deployment_<!-- /LIVE_FRONTEND -->
-- **Live API:** <!-- LIVE_BACKEND -->_added after deployment_<!-- /LIVE_BACKEND --> (`/api/health`)
+- **Live app:** https://trao-interview-prep-kit.vercel.app
+- **Live API:** https://trao-interview-prep-kit-backend.onrender.com (`/api/health`)
 - **Why each decision was made:** [DECISIONS.md](DECISIONS.md), 24 short entries. This README summarises them.
 
 ## Contents
@@ -192,7 +192,7 @@ Not done: per-field tracking. Editing a prompt protects the whole question, incl
 ## 11. Security
 
 - **URLs.** Only http and https, no embedded credentials. Private, loopback and link-local addresses are refused when `NODE_ENV=production`. The check that matters runs in the socket's DNS lookup, against the address actually being connected to, which closes DNS rebinding and covers every redirect hop. Outside production they are allowed, because evaluation sites may be served from localhost; `ALLOW_PRIVATE_URLS` forces either behaviour.
-- **Content.** HTML, XHTML, plain text and XML only; 1.5 MB enforced while streaming, because `Content-Length` can lie; ten-second timeout; at most five redirects, each re-validated.
+- **Content.** HTML, XHTML, plain text and XML only; a page is read up to 3 MB and used as far as it got (the limit is enforced while streaming, because `Content-Length` can lie, and modern marketing pages are often megabytes of markup with the readable text near the top); ten-second timeout; at most five redirects, each re-validated.
 - **Fetched text is content, never instructions.** Scripts, comments and anything hidden by attribute or style are removed before text is taken, since that is where text aimed at a model gets planted. The posting and every page reach the model only inside labelled `<untrusted_*>` blocks that content cannot close, under a system rule that such text is never an instruction. The structural defence does not rely on the model obeying: nothing a page says can add a requirement (requirements come only from verified quotes of the posting), change the output shape (every answer is schema-validated) or add a hiring stage (stages must be traceable to the hiring page). The `umbrella` fixture plants instructions in a comment, a hidden element and visible text, and the posting for that case carries "ignore all previous instructions"; the self-check asserts none of it reaches the kit.
 - **Auth.** bcrypt (cost 12); a seven-day HS256 JWT in an `httpOnly`, `SameSite=Lax` cookie, `Secure` in production; the verifier accepts HS256 only; sign-in answers identically, in the same time, for a wrong password and an unknown email; auth routes are rate limited. Kits are reached only through a repository whose every method takes the owner's id, and someone else's kit answers 404, so ids cannot be probed.
 
@@ -207,7 +207,7 @@ Two smaller additions: **undo for a regeneration**, because losing a generated q
 ## 13. Testing
 
 ```bash
-npm test                # 270 tests, no network, no live model
+npm test                # 271 tests, no network, no live model
 npm run typecheck
 npm run selfcheck       # live model, scored against the published rubric (about 40 requests)
 ```
