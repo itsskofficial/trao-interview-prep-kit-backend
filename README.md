@@ -1,5 +1,7 @@
 # AI Interview Prep Kit - backend
 
+[![CI](https://github.com/itsskofficial/trao-interview-prep-kit-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/itsskofficial/trao-interview-prep-kit-backend/actions/workflows/ci.yml)
+
 Turns a job description, a company website and a number of days into a structured interview preparation kit. This repository holds the research and generation pipeline, the HTTP API and the batch command. The interface lives in [trao-interview-prep-kit-frontend](https://github.com/itsskofficial/trao-interview-prep-kit-frontend).
 
 > Work in progress. This README is completed in the final ticket; the batch command below already works.
