@@ -33,3 +33,11 @@ Output is parsed leniently (code fences and surrounding prose are tolerated) and
 ## 8. Minimal thinking on Gemini
 
 `thinkingLevel: "minimal"` cut a structured call from about 13s to 3–8s in measurement. Extraction and drafting do not need long reasoning, and latency decides whether five cases fit in fifteen minutes.
+
+## 9. How extraction refuses to invent
+
+The model returns each requirement with a verbatim `evidence` quote. Code then: (a) drops the requirement if the quote is not in the description, comparing with whitespace, case and typographic quotes normalised; (b) replaces the model's restatement with the posting's own words if fewer than half of its significant words appear in the evidence; (c) blanks seniority, location and company unless the description states them; (d) drops responsibilities whose words are not in the description; (e) numbers requirements in posting order so ids are stable. Fewer than three verified requirements marks the kit as thin. A live run ignored an "ignore all previous instructions" line planted in a posting, but the design does not rely on that: nothing a page or posting says can change the output shape, and requirements only ever come from verified quotes.
+
+## 10. Must or nice is decided by wording, in a fixed order
+
+Bonus phrases are checked before required phrases, and scope narrows from the evidence, to its sentence, to the heading above it. So "Rust is a plus" under a Requirements heading is nice, "a work permit is required" under Nice to have is must, and a one-line stub ("Required: React. Bonus: GraphQL.") is split by sentence. Loose phrases like "you have" count only in headings. The model's label is the last resort.
