@@ -1,0 +1,23 @@
+# Decisions
+
+A running log of the judgement calls in this project and why each was made. Newest at the bottom.
+
+## 1. An unreachable company site is `ok`, not `failed`
+
+The brief's Appendix B example shows `COMPANY_UNREACHABLE` as a failed case, but its FAQ says to reserve `failed` for "a case you could not produce a kit for at all", and the scoring rewards unreachable sites being "recorded rather than fatal". A job description alone is enough for requirements, questions, flashcards and a schedule. So a dead URL produces an `ok` kit whose brief says the site could not be retrieved, with the attempt in `research_log`. `failed` is kept for an empty description or the model being unavailable on every provider.
+
+## 2. The model proposes requirements; code decides whether they exist
+
+Every extracted requirement must carry a verbatim evidence quote. Code checks the quote appears in the job description and drops the requirement if it does not. `must` or `nice` is decided by code from the wording of that line and its heading. Inventing a requirement is the worst failure the brief names, so it is not left to a prompt.
+
+## 3. LLM: `gemini-3.5-flash-lite`, with Groq as fallback
+
+Measured on a free-tier key on 2026-09-19: every full Gemini Flash model allows 20 requests per day, which is two kits. Flash-Lite allows 15 requests/min, 250K tokens/min and 500 requests/day. Groq's free tier allows 8K tokens/min, which is too slow as a primary for five cases in fifteen minutes but fine as a fallback. The budget is at most ten model calls per kit.
+
+## 4. One Zod schema for the kit, and validation that reports everything
+
+The kit schema is defined once and used for model output, the assembled kit and the batch file. `validateKit` checks shape and then internal references (requirement ids, question ids, day count and numbering) and returns every problem at once, so a bad model response can be repaired in a single retry. Extensions (`origin`, `edited`, `pinned`, `evidence`, `hiring_stages`, `research_log`, `notes`) are optional so a bare Appendix A kit still validates.
+
+## 5. Batch input is validated per case
+
+The input file is parsed as an array of unknowns and each entry is validated on its own, so one malformed case becomes one `failed` entry instead of aborting the run.
