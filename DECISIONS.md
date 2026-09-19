@@ -57,3 +57,15 @@ Coverage is set arithmetic in code: a requirement is covered if some question li
 The loop stops on the first of: no must-have uncovered; a pass that closed nothing (asking the same model the same question again spends quota for the same answer); three checks. Three is enough because in practice a targeted "write one question for each of these" closes every gap in one round, and the free tier allows only ten calls per kit. Nice-to-have gaps get one attempt and are then reported in `uncovered_requirement_ids` rather than forced.
 
 If a must-have is still uncovered after that, code writes a plain question from the requirement text, marked `origin: "fallback"`, and the kit notes it. The brief says a kit with an uncovered must-have "has failed at the one job it had", so that guarantee is enforced by code. A model error during gap-closing is treated as a pass that closed nothing, so it ends in fallbacks rather than a failed kit.
+
+## 14. Fetched pages are untrusted from the first byte
+
+The fetcher never throws: every problem is a typed skip reason (`invalid_url`, `blocked_address`, `robots_disallowed`, `http_error`, `timeout`, `network`, `unsupported_content_type`, `too_large`, `too_many_redirects`), so one bad source cannot fail a run and the reason can be shown to the user.
+
+- **Addresses.** Scheme, embedded credentials and literal IPs are checked before any request. The real guard is in the socket's DNS lookup: the address actually being connected to is checked, which closes DNS rebinding (a hostname that validates and then resolves elsewhere) and covers every redirect hop. Private and loopback addresses are refused when `NODE_ENV=production` and allowed otherwise, because the evaluators serve company sites from localhost; `ALLOW_PRIVATE_URLS` forces either behaviour.
+- **Redirects** are followed by hand, at most five, and each hop goes back through validation and robots.txt.
+- **Limits.** HTML, XHTML, plain text and XML only; 1.5 MB enforced while streaming because Content-Length can lie; ten-second timeout.
+- **Politeness.** robots.txt is read once per origin and obeyed. Requests to one host are serialised with a one-second gap (25 ms for loopback, where politeness only slows a local run). 429, 5xx, timeouts and network errors retry twice with backoff, honouring Retry-After.
+- **Cleaning.** Scripts, styles, forms, comments and anything hidden by attribute or inline style are removed before text is taken, since that is where text aimed at a model gets planted. Links are collected first, with the region they were found in (nav, header, footer, body), and resolved against the page URL or its `<base>`, never against an assumed host.
+
+Known limitation: pages that render only with JavaScript yield little text, because no browser is run. A hosted scraper was ruled out: it cannot reach a site served from the evaluator's localhost, and it would require a third API key.

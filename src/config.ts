@@ -11,12 +11,23 @@ const EnvSchema = z.object({
   GEMINI_TPM: z.coerce.number().int().positive().default(200_000),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   LLM_REPLAY_CACHE: z.string().default(""),
+  ALLOW_PRIVATE_URLS: z.enum(["true", "false", ""]).default(""),
 });
 
 export type Config = z.infer<typeof EnvSchema>;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return EnvSchema.parse(env);
+}
+
+/**
+ * Whether company URLs may point at loopback or private addresses. Refused in
+ * production, where the server fetches on behalf of strangers; allowed
+ * elsewhere so that a company site served from localhost can be crawled.
+ */
+export function allowsPrivateUrls(config: Config): boolean {
+  if (config.ALLOW_PRIVATE_URLS !== "") return config.ALLOW_PRIVATE_URLS === "true";
+  return config.NODE_ENV !== "production";
 }
 
 /** Reads .env into process.env when the file exists. Real environment variables win. */
