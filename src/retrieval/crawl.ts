@@ -33,14 +33,22 @@ export interface CrawlOptions {
 }
 
 /** Words that appear when a page describes a hiring process rather than just listing jobs. */
-const PROCESS_TERMS = [
+export const PROCESS_TERMS = [
   "interview", "hiring process", "recruiter", "phone screen", "screening call", "take-home", "take home", "coding challenge",
   "technical assessment", "assessment", "pair programming", "pairing session", "system design", "onsite", "on-site",
   "final round", "stage", "round", "offer", "hiring manager", "reference check", "values interview", "work sample",
 ];
+/** Terms that name a stage outright, as opposed to words that merely turn up around hiring. */
+export const STAGE_TERMS = [
+  "phone screen", "screening call", "recruiter call", "take-home", "take home", "coding challenge", "technical assessment",
+  "technical interview", "pair programming", "pairing session", "system design", "onsite", "on-site", "final round",
+  "values interview", "culture interview", "work sample", "superday", "reference check", "offer",
+];
+
 /** "Stage", "round" and "offer" also describe funding and pricing, so one of these must be present too. */
 const PROCESS_ANCHORS = ["interview", "hiring process", "how we hire", "recruit"];
 const MIN_PROCESS_TERMS = 3;
+const MAX_PAGE_TEXT_CHARS = 80_000;
 /** A page this clearly about the process ends the search for a better one. */
 const CONFIDENT_PROCESS_TERMS = 6;
 
@@ -66,7 +74,8 @@ export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher,
   const queue: RankedLink[] = [];
 
   const visit = (result: Extract<FetchResult, { ok: true }>, depth: number, parent?: RankedLink): CrawledPage => {
-    const clean = cleanHtml(result.body, result.url);
+    // Kept long: a handbook page can bury the stages tens of thousands of characters in. The brief step picks its excerpt.
+    const clean = cleanHtml(result.body, result.url, MAX_PAGE_TEXT_CHARS);
     const page: CrawledPage = {
       url: result.url,
       title: clean.title,

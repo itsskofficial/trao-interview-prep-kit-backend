@@ -6,7 +6,7 @@ Turns a job description, a company website and a number of days into a structure
 
 - **Live app:** https://trao-interview-prep-kit.vercel.app
 - **Live API:** https://trao-interview-prep-kit-backend.onrender.com (`/api/health`)
-- **Why each decision was made:** [DECISIONS.md](DECISIONS.md), 25 short entries. This README summarises them.
+- **Why each decision was made:** [DECISIONS.md](DECISIONS.md), 26 short entries. This README summarises them.
 
 ## Contents
 
@@ -207,7 +207,7 @@ Two smaller additions: **undo for a regeneration**, because losing a generated q
 ## 13. Testing
 
 ```bash
-npm test                # 275 tests, no network, no live model
+npm test                # 280 tests, no network, no live model
 npm run typecheck
 npm run selfcheck       # live model, scored against the published rubric (about 40 requests)
 ```

@@ -3,7 +3,8 @@ import { wordOverlap } from "../extraction/evidence";
 import type { Kit } from "../kit/schema";
 import type { LlmClient } from "../llm/types";
 import { UNTRUSTED_CONTENT_RULE, wrapUntrusted } from "../llm/untrusted";
-import type { CrawledPage } from "../retrieval/crawl";
+import { PROCESS_TERMS, STAGE_TERMS, type CrawledPage } from "../retrieval/crawl";
+import { processDigest } from "../retrieval/excerpt";
 import type { DiscussionSnippet } from "../retrieval/discussion";
 
 const ProposedBriefSchema = z.object({
@@ -42,6 +43,7 @@ Rules:
 - ${UNTRUSTED_CONTENT_RULE}`;
 
 const PAGE_CHARS = 6_000;
+const HIRING_PAGE_CHARS = 9_000;
 
 /**
  * Turns what was actually retrieved into a brief. With nothing retrieved the
@@ -53,7 +55,12 @@ export async function writeCompanyBrief(input: BriefInput, llm: LlmClient): Prom
   if (pages.length === 0 && input.discussion.length === 0) return nothingFound(input);
 
   const blocks = [
-    ...pages.map((page) => wrapUntrusted(page === input.hiring ? "hiring_page" : "company_page", `${page.title}\n${page.text}`, PAGE_CHARS)),
+    ...pages.map((page) =>
+      page === input.hiring
+        ? // Not the top of a long page, but the lines from all over it that talk about the process.
+          wrapUntrusted("hiring_page", `${page.title}\n${processDigest(page.text, { strong: STAGE_TERMS, weak: PROCESS_TERMS }, HIRING_PAGE_CHARS)}`, HIRING_PAGE_CHARS + 200)
+        : wrapUntrusted("company_page", `${page.title}\n${page.text}`, PAGE_CHARS),
+    ),
     ...(input.discussion.length > 0
       ? [wrapUntrusted("public_discussion", input.discussion.map((snippet) => `- ${snippet.text}`).join("\n"), PAGE_CHARS)]
       : []),
