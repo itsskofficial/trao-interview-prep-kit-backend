@@ -6,7 +6,7 @@ Turns a job description, a company website and a number of days into a structure
 
 - **Live app:** https://trao-interview-prep-kit.vercel.app
 - **Live API:** https://trao-interview-prep-kit-backend.onrender.com (`/api/health`)
-- **Why each decision was made:** [DECISIONS.md](DECISIONS.md), 26 short entries. This README summarises them.
+- **Why each decision was made:** [DECISIONS.md](DECISIONS.md), 27 short entries. This README summarises them.
 
 ## Contents
 
@@ -27,7 +27,7 @@ Turns a job description, a company website and a number of days into a structure
 
 ## 1. Batch entry point
 
-Requires Node.js 20.12 or newer. From a clean clone:
+Requires Node.js 20.18.1 or newer (22 recommended). From a clean clone:
 
 ```bash
 npm install
@@ -39,8 +39,9 @@ npm run evaluate -- --input <cases.json> --output <kits.json>
 - Runs the same `buildKit` function the application uses. There is no second implementation.
 - One bad or failing case never aborts the run. Entries are validated one by one, so a malformed case fails alone.
 - Company sites on a local address work, on any port and under any path; relative links are resolved against the page they were found on.
-- Five cases take about 2 minutes 20 seconds on the free tier (measured; the ceiling is the provider's requests per minute, see [decision 19](DECISIONS.md)). Each case also has a 170-second budget and is recorded as `TIMEOUT` if it overruns, so one hung site cannot cost the fifteen minutes.
-- `GROQ_API_KEY` is optional. When set, Groq takes over if Gemini's daily quota runs out. `LLM_PROVIDER=groq` makes Groq the primary, so either free key is enough.
+- Five cases take about 2 minutes 20 seconds on the free tier (measured; the ceiling is the provider's requests per minute, see [decision 19](DECISIONS.md)). Each case also has a 170-second budget and is recorded as `TIMEOUT` if it overruns, so one hung site cannot cost the fifteen minutes; a case that is given up on stops making model calls, so it cannot starve the cases after it. The crawl has its own 45-second deadline and counts failed fetches against its page budget.
+- `GROQ_API_KEY` is optional. When set, Groq takes over if Gemini's daily quota runs out. `LLM_PROVIDER=groq` makes Groq the primary and the command works, but be aware of what its free tier allows: 8K tokens a minute means a kit takes several minutes there (each case gets ten minutes instead of 170 seconds), so **five cases inside fifteen minutes needs the Gemini key**.
+- The cases file may start with a byte-order mark, ids may be numbers, `days` may be a numeric string, and a company address may be typed without `http://`. The output file is rewritten after every case, so a run stopped early still leaves what it finished.
 
 Try it against the bundled fixture companies:
 
@@ -113,7 +114,7 @@ Retrieval, extraction, generation, scheduling and persistence do not import each
 
 **Sources used:** the company's own site (the URL given, and same-origin pages found by crawling it, plus `sitemap.xml` beside it when present); **Hacker News** through the Algolia search API; **Stack Exchange Workplace** through the Stack Exchange API. Both APIs are official, keyless and open to programmatic use. **Reddit and Glassdoor were left out**: most interview discussion lives there, but their robots.txt and terms forbid unauthenticated automated access.
 
-**Finding the hiring page.** No path is assumed. Every same-origin link is scored in code from its anchor text (what the company chose to call the page), the words in its path, where it sits (navigation and footers get a point) and its depth. Interviewing and hiring words score highest, careers and jobs next, then handbook, people, culture and engineering pages, which are rarely the answer but often one click from it. The crawler always fetches the best-scoring unvisited link next, to depth two, within twelve pages. A link called "Careers" proves nothing, so a page counts as the hiring page only if **its own text** describes a process: at least three process terms and one unambiguous anchor such as "interview", because "round" and "stage" also describe funding. Links found on such a page inherit part of its score, which is how a vaguely named "What to expect" page two clicks down gets fetched.
+**Finding the hiring page.** No path is assumed. When the company's address is a folder on a shared origin (`http://host/acme/`), its site is that folder and nothing beside it, so another company's hiring page on the same host cannot be picked up. Every in-scope link is scored in code from its anchor text (what the company chose to call the page), the words in its path, where it sits (navigation and footers get a point) and its depth. Interviewing and hiring words score highest, careers and jobs next, then handbook, people, culture and engineering pages, which are rarely the answer but often one click from it. The crawler always fetches the best-scoring unvisited link next, to depth two, within twelve pages. A link called "Careers" proves nothing, so a page counts as the hiring page only if **its own text** describes a process: at least three process terms, matched as whole words, and one unambiguous anchor such as "interview". "Round" and "stage" only count beside an ordinal, and "offer" only in "make an offer", because a careers page that says "we offer competitive pay to engineers around the world" has not described a process. Links found on such a page inherit part of its score, which is how a vaguely named "What to expect" page two clicks down gets fetched.
 
 **robots.txt and politeness.** robots.txt is read once per origin and obeyed; requests to one host are serialised one second apart; 429, 5xx, timeouts and network errors retry twice with backoff honouring `Retry-After`. A source that cannot be retrieved is skipped and recorded with its reason in the kit's `research_log`; it never fails the run.
 
@@ -207,7 +208,7 @@ Two smaller additions: **undo for a regeneration**, because losing a generated q
 ## 13. Testing
 
 ```bash
-npm test                # 280 tests, no network, no live model
+npm test                # 324 tests, no network, no live model
 npm run typecheck
 npm run selfcheck       # live model, scored against the published rubric (about 40 requests)
 ```

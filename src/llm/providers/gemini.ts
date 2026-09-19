@@ -35,7 +35,9 @@ export function geminiProvider(options: { apiKey: string; model: string; fetchFn
       const text = body.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
       if (!text) {
         const reason = body.candidates?.[0]?.finishReason ?? body.promptFeedback?.blockReason ?? "empty response";
-        throw new ProviderError("server", `Gemini returned no text (${reason}).`);
+        // A blocked or cut-off answer will be blocked or cut off again: asking five more times only spends the case's time.
+        const deterministic = /SAFETY|RECITATION|MAX_TOKENS|PROHIBITED|BLOCKLIST|SPII|OTHER/.test(reason);
+        throw new ProviderError(deterministic ? "bad_request" : "server", `Gemini returned no text (${reason}).`);
       }
       return { text };
     },

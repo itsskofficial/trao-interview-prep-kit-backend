@@ -140,9 +140,14 @@ export function builderRouter(kits: KitRepository, regenerator: Regenerator, lim
 
   router.post("/:id/regenerate", async (request, response) => {
     const body = parse(RegenerateSchema, request.body);
-    // The schedule is arithmetic and free; the other sections call the model.
-    if (body.section !== "schedule") await limits.spend(response.locals.userId as ObjectId, "regeneration");
-    const saved = await guarded(() => regenerator.start(response.locals.userId as ObjectId, request.params.id, body));
+    // The schedule is arithmetic and free; the other sections call the model. A regeneration that is
+    // refused (already running, a protected brief awaiting confirmation, no such kit) is given back.
+    const charge = body.section === "schedule" ? undefined : await limits.spend(response.locals.userId as ObjectId, "regeneration");
+    const saved = await guarded(() => regenerator.start(response.locals.userId as ObjectId, request.params.id, body)).catch(async (error: unknown) => {
+      await charge?.refund();
+      throw error;
+    });
+    if (!saved) await charge?.refund();
     // 202: the kit now says a section is regenerating; poll the kit to see it finish. The schedule is instant.
     response.status(body.section === "schedule" ? 200 : 202).json(present(saved));
   });

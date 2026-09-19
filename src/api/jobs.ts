@@ -77,7 +77,7 @@ export function jobsRouter(db: Database, kits: KitRepository, runner: JobRunner,
     if ((await db.jobs.countDocuments({ userId: owner, active: true })) >= maxActiveJobs) {
       throw new ApiError(429, "TOO_MANY_ACTIVE_JOBS", `You already have ${maxActiveJobs} kits being generated. Wait for one to finish.`);
     }
-    await limits.spend(owner, "generation");
+    const charge = await limits.spend(owner, "generation");
 
     const now = new Date();
     const job: JobDoc = {
@@ -96,6 +96,8 @@ export function jobsRouter(db: Database, kits: KitRepository, runner: JobRunner,
     try {
       await db.jobs.insertOne(job);
     } catch (error) {
+      // This job will not run, so it is not paid for.
+      await charge.refund();
       // Two submissions raced past the check above; the unique index let only one in.
       if ((error as { code?: number }).code !== 11000) throw error;
       const winner = await db.jobs.findOne({ userId: owner, fingerprint, active: true });
@@ -152,17 +154,26 @@ export function jobsRouter(db: Database, kits: KitRepository, runner: JobRunner,
     if (job.status !== "failed" && job.status !== "interrupted") {
       throw new ApiError(409, "NOT_RETRYABLE", "Only a failed or interrupted job can be retried.");
     }
+    // A retry calls the model again, so it counts like a new generation.
+    if ((await db.jobs.countDocuments({ userId: owner, active: true })) >= maxActiveJobs) {
+      throw new ApiError(429, "TOO_MANY_ACTIVE_JOBS", `You already have ${maxActiveJobs} kits being generated. Wait for one to finish.`);
+    }
+    const charge = await limits.spend(owner, "generation");
     const retried = await db.jobs
       .findOneAndUpdate(
         { _id: job._id, userId: owner, status: job.status },
         { $set: { status: "queued", active: true, steps: [], updatedAt: new Date() }, $unset: { error: "" } },
         { returnDocument: "after" },
       )
-      .catch((error: unknown) => {
+      .catch(async (error: unknown) => {
+        await charge.refund();
         if ((error as { code?: number }).code === 11000) throw new ApiError(409, "ALREADY_RUNNING", "This posting is already being generated.");
         throw error;
       });
-    if (!retried) throw new ApiError(409, "NOT_RETRYABLE", "This job was already retried.");
+    if (!retried) {
+      await charge.refund();
+      throw new ApiError(409, "NOT_RETRYABLE", "This job was already retried.");
+    }
     runner.enqueue(retried._id);
     response.status(202).json({ job: toPublic(retried) });
   });

@@ -5,11 +5,14 @@ import { KitSchema } from "../kit/schema";
 
 export const MAX_DAYS = 365;
 
+/** Forgiving about how the file was produced: a numeric id or "5" for days is not a reason to fail a case. */
 export const CaseInputSchema = z.object({
-  id: z.string().min(1),
+  id: z.union([z.string().min(1), z.number()]).transform(String),
   jd: z.string(),
   company_url: z.string(),
-  days: z.number().int().min(1).max(MAX_DAYS),
+  days: z
+    .union([z.number(), z.string().regex(/^\d+$/).transform(Number)])
+    .pipe(z.number().int().min(1).max(MAX_DAYS)),
 });
 
 /** Entries are validated one by one, so a malformed case fails alone instead of aborting the run. */

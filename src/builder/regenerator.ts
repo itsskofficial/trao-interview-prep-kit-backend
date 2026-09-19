@@ -68,6 +68,8 @@ export function createRegenerator(kits: KitRepository, pipeline: PipelineDeps): 
   }
 
   async function regenerateBrief(userId: ObjectId, kitId: string, kit: Kit, force: boolean): Promise<void> {
+    // What the brief said when the user asked. "Replace my edited brief" is consent to replace this text, not whatever they type next.
+    const asked = briefText(kit);
     const crawl = await crawlCompanySite(kit.source.company_url, pipeline.fetcher);
     const company = kit.source.company || crawl.siteName;
     const discussion = await (pipeline.searchDiscussion ?? createDiscussionSearch(pipeline.fetcher))(company);
@@ -77,8 +79,9 @@ export function createRegenerator(kits: KitRepository, pipeline: PipelineDeps): 
     );
 
     await kits.mutate(userId, kitId, (doc) => {
-      // The user may have started typing in the brief after asking for a new one. Their text wins.
-      if (isProtected(doc.kit.company_brief) && !force) {
+      // The user may have started typing in the brief after asking for a new one. Their text wins, forced or not.
+      const typedSince = briefText(doc.kit) !== asked;
+      if (typedSince || (isProtected(doc.kit.company_brief) && !force)) {
         return { set: { regeneration: { section: "brief", status: "failed", startedAt: new Date(), error: "You edited the brief while it was being regenerated, so your version was kept." } } };
       }
       // Absent optional fields are stored as empty lists: MongoDB would turn `undefined` into `null`, which is not a valid kit.
@@ -151,6 +154,8 @@ export function createRegenerator(kits: KitRepository, pipeline: PipelineDeps): 
     },
   };
 }
+
+const briefText = (kit: Kit) => JSON.stringify([kit.company_brief.summary, kit.company_brief.what_they_do]);
 
 /** The same call the first generation would make for this category, from what the kit already knows. No re-crawl. */
 function plannedCallFor(kit: Kit, category: QuestionCategory): PlannedCall {

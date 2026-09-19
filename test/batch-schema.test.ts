@@ -13,7 +13,7 @@ describe("batch input", () => {
     expect(CaseInputSchema.safeParse({ ...validCase, jd: "" }).success).toBe(true);
   });
 
-  it.each([0, -1, 2.5, "5", 366])("rejects days = %s", (days) => {
+  it.each([0, -1, 2.5, "five", "", 366])("rejects days = %s", (days) => {
     expect(CaseInputSchema.safeParse({ ...validCase, days }).success).toBe(false);
   });
 

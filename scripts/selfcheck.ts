@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 import { startFixtureServer } from "../fixtures/server";
 import { runBatch } from "../src/batch/run";
 import { BatchOutputSchema, type BatchOutput, type CaseResult } from "../src/batch/schema";
-import { allowsPrivateUrls, loadConfig, loadEnvFile } from "../src/config";
+import { allowsPrivateUrls, caseTimeoutMs, loadConfig, loadEnvFile } from "../src/config";
 import { findUncovered } from "../src/coverage/coverage";
 import type { Kit } from "../src/kit/schema";
 import { validateKit } from "../src/kit/validate";
@@ -120,7 +120,7 @@ if (values.from) {
     llm: createLlmClientFromConfig(config),
     fetcher,
     concurrency: config.BATCH_CONCURRENCY,
-    caseTimeoutMs: config.CASE_TIMEOUT_MS,
+    caseTimeoutMs: caseTimeoutMs(config),
     log: (line) => console.log(line),
   });
   elapsed = Date.now() - started;

@@ -60,6 +60,7 @@ export interface JobDoc {
 }
 
 export interface UsageDoc {
+  _id: ObjectId;
   userId: ObjectId;
   kind: "generation" | "regeneration";
   at: Date;

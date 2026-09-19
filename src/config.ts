@@ -35,7 +35,8 @@ const EnvSchema = z.object({
   FRONTEND_ORIGIN: z.string().default("http://localhost:3000"),
   // Batch command: how many cases run at once, and how long one case may take before it is recorded as timed out.
   BATCH_CONCURRENCY: z.coerce.number().int().min(1).max(5).default(2),
-  CASE_TIMEOUT_MS: z.coerce.number().int().positive().default(170_000),
+  // Default: 170 seconds on Gemini. Groq's free tier allows 8K tokens a minute, so a kit takes several minutes there.
+  CASE_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
 });
 
 export type Config = z.infer<typeof EnvSchema>;
@@ -58,6 +59,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
  * production, where the server fetches on behalf of strangers; allowed
  * elsewhere so that a company site served from localhost can be crawled.
  */
+export function caseTimeoutMs(config: Config): number {
+  return config.CASE_TIMEOUT_MS ?? (config.LLM_PROVIDER === "groq" ? 600_000 : 170_000);
+}
+
 export function allowsPrivateUrls(config: Config): boolean {
   if (config.ALLOW_PRIVATE_URLS !== "") return config.ALLOW_PRIVATE_URLS === "true";
   return config.NODE_ENV !== "production";

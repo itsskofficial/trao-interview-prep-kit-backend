@@ -43,7 +43,8 @@ describe("RateLimiter", () => {
     await expect(limiter.acquire(5000)).resolves.toBeUndefined();
   });
 
-  it("estimates tokens from prompt length plus the output allowance", () => {
+  it("estimates tokens from prompt length plus a typical answer, not the output ceiling", () => {
     expect(estimateTokens("x".repeat(400), 1000)).toBe(1100);
+    expect(estimateTokens("x".repeat(400), 4096)).toBe(1600);
   });
 });

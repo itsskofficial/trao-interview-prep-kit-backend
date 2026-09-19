@@ -8,8 +8,8 @@ import { idAllocator } from "../kit/ids";
 import type { Kit, Question, QuestionCategory, Requirement } from "../kit/schema";
 import { validateKit } from "../kit/validate";
 import { LlmError, type LlmClient } from "../llm/types";
-import { crawlCompanySite, type CrawledPage } from "../retrieval/crawl";
-import { createDiscussionSearch, type DiscussionSearch } from "../retrieval/discussion";
+import { crawlCompanySite, type CrawledPage, type SiteCrawl } from "../retrieval/crawl";
+import { createDiscussionSearch, type DiscussionResult, type DiscussionSearch } from "../retrieval/discussion";
 import type { PageFetcher } from "../retrieval/fetcher";
 import { allocateSchedule } from "../scheduling/allocate";
 import { PipelineError } from "./errors";
@@ -35,6 +35,8 @@ export interface PipelineDeps {
   searchDiscussion?: DiscussionSearch;
   now?: () => Date;
   onProgress?: (event: ProgressEvent) => void;
+  /** Set when the caller has given up on this kit (a batch case past its time budget). No further model call is started. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -46,7 +48,14 @@ export interface PipelineDeps {
  * leaves a note, and coverage is guaranteed by code either way.
  */
 export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promise<Kit> {
-  const { llm, fetcher, now = () => new Date(), onProgress = () => undefined } = deps;
+  const { fetcher, now = () => new Date(), onProgress = () => undefined } = deps;
+  // An abandoned kit must not keep queueing calls on the shared rate limiter ahead of the kits still wanted.
+  const llm: LlmClient = {
+    generate: (request) => {
+      deps.signal?.throwIfAborted();
+      return deps.llm.generate(request);
+    },
+  };
   const searchDiscussion = deps.searchDiscussion ?? createDiscussionSearch(fetcher);
   const notes: string[] = [];
 
@@ -66,7 +75,16 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
 
   // 2. Crawl the company site. A homepage is only useful once its links have been ranked and followed.
   onProgress({ step: "crawl", status: "started" });
-  const crawl = await crawlCompanySite(input.companyUrl, fetcher);
+  // Whatever goes wrong while reading someone else's site costs the research, never the kit.
+  const crawl = await crawlCompanySite(withScheme(input.companyUrl), fetcher).catch(
+    (error: unknown): SiteCrawl => ({
+      reachable: false,
+      failure: "The site could not be read.",
+      siteName: "",
+      pages: [],
+      log: [{ source: "company-site", url: input.companyUrl, outcome: "failed", reason: `Unexpected error while reading the site: ${errorMessage(error)}` }],
+    }),
+  );
   if (!crawl.reachable) {
     notes.push(`The company site could not be read (${crawl.failure}) so this kit is based on the job description alone.`);
   } else if (!crawl.hiring) {
@@ -81,7 +99,9 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
   // 3. Public discussion of how this company interviews. Needs a company name, which may only be known after the crawl.
   const company = role.company || crawl.siteName;
   onProgress({ step: "discussion", status: "started" });
-  const discussion = await searchDiscussion(company);
+  const discussion = await searchDiscussion(company).catch(
+    (error: unknown): DiscussionResult => ({ snippets: [], log: [{ source: "public-discussion", outcome: "skipped", reason: `Search failed: ${errorMessage(error)}` }] }),
+  );
   onProgress({
     step: "discussion",
     status: discussion.snippets.length > 0 ? "done" : "skipped",
@@ -216,6 +236,12 @@ async function generateForGaps(gaps: Requirement[], context: QuestionContext, ll
     drafts.push(...(await generateQuestions({ category, requirements, context, closingGaps: true }, llm)));
   }
   return drafts;
+}
+
+/** "acme.com" and "localhost:8099/acme/" are what people type. The kit still records the address as it was given. */
+function withScheme(url: string): string {
+  const trimmed = url.trim();
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
 }
 
 function toPipelineError(error: unknown): PipelineError {

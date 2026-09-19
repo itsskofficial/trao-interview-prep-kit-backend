@@ -9,6 +9,8 @@ export interface BatchDeps extends PipelineDeps {
   /** A case still running after this long is recorded as TIMEOUT so the rest of the run is not held up. */
   caseTimeoutMs?: number;
   log?: (line: string) => void;
+  /** Called as each case finishes, with everything finished so far in input order, so a run killed late still leaves a file. */
+  onPartial?: (finished: CaseResult[]) => void | Promise<void>;
 }
 
 /** A case result before it is given its id, so identical cases can share one. */
@@ -47,6 +49,7 @@ export async function runBatch(cases: unknown[], deps: BatchDeps): Promise<Batch
       }
 
       results[index] = { id, ...outcome } as CaseResult;
+      await deps.onPartial?.(results.filter(Boolean));
       const label = outcome.status === "ok" ? "ok" : `failed (${outcome.error.code})`;
       log(`[${++finished}/${cases.length}] ${id}: ${label} in ${Math.round((Date.now() - started) / 1000)}s`);
     }
@@ -58,12 +61,20 @@ export async function runBatch(cases: unknown[], deps: BatchDeps): Promise<Batch
 
 async function runCase(input: CaseInput, deps: BatchDeps, timeoutMs: number): Promise<Outcome> {
   let timer: NodeJS.Timeout | undefined;
+  // Giving up on a case also stops it: its remaining model calls would otherwise sit in the shared
+  // rate limiter ahead of the cases still running, and make them time out too.
+  const abandoned = new AbortController();
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new PipelineError("TIMEOUT", `No kit after ${Math.round(timeoutMs / 1000)} seconds.`)), timeoutMs);
+    timer = setTimeout(() => {
+      abandoned.abort();
+      reject(new PipelineError("TIMEOUT", `No kit after ${Math.round(timeoutMs / 1000)} seconds.`));
+    }, timeoutMs);
   });
 
   try {
-    const kit = await Promise.race([buildKit({ jd: input.jd, companyUrl: input.company_url, days: input.days }, deps), timeout]);
+    const work = buildKit({ jd: input.jd, companyUrl: input.company_url, days: input.days }, { ...deps, signal: abandoned.signal });
+    work.catch(() => undefined); // once abandoned, its eventual failure is nobody's concern
+    const kit = await Promise.race([work, timeout]);
     return { status: "ok", kit, error: null };
   } catch (error) {
     return failure(error);
@@ -90,5 +101,6 @@ function fingerprint(input: CaseInput): string {
 /** Results are keyed by the id we were given, even when the rest of the case is malformed. */
 function caseId(entry: unknown, index: number): string {
   const id = (entry as { id?: unknown } | null)?.id;
+  if (typeof id === "number") return String(id);
   return typeof id === "string" && id.length > 0 ? id : `case-${index + 1}`;
 }

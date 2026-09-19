@@ -47,7 +47,13 @@ export class RateLimiter {
   }
 }
 
-/** Rough but safe: about four characters per token, plus everything the model may write back. */
+/** What an answer in this application actually runs to. The ceiling (4,096) is a limit, not an expectation. */
+const TYPICAL_OUTPUT_TOKENS = 1_500;
+
+/**
+ * About four characters per token for the prompt, plus a typical answer. Reserving the output
+ * ceiling instead would let a provider with a small per-minute budget make one call a minute.
+ */
 export function estimateTokens(text: string, maxOutputTokens: number): number {
-  return Math.ceil(text.length / 4) + maxOutputTokens;
+  return Math.ceil(text.length / 4) + Math.min(maxOutputTokens, TYPICAL_OUTPUT_TOKENS);
 }
