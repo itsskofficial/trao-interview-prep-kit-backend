@@ -176,3 +176,69 @@ describe("job ownership", () => {
     expect((await bob.get("/api/jobs")).body.jobs).toEqual([]);
   });
 });
+
+describe("protecting the shared model quota", () => {
+  it("refuses more generations than the hourly allowance, and says when to try again", async () => {
+    const limited = await startTestApi({ GENERATIONS_PER_HOUR: 2 }, { llm: model.llm });
+    try {
+      const ada = await limited.signedIn();
+      const post = (n: number) => ada.post("/api/jobs").send({ ...newJob, jd: `${JD}\n- Skill ${n}` });
+      await post(1).expect(202);
+      await post(2).expect(202);
+      const refused = await post(3).expect(429);
+      expect(refused.body.error.code).toBe("GENERATION_LIMIT");
+      expect(refused.body.error.message).toMatch(/Try again in about \d+ minute/);
+
+      // A duplicate costs nothing, so it is still answered.
+      expect((await post(1)).body.outcome).toMatch(/already_running|kit_exists/);
+      // Another account has its own allowance.
+      const bob = await limited.signedIn();
+      await bob.post("/api/jobs").send(newJob).expect(202);
+    } finally {
+      await limited.close();
+    }
+  }, 120_000);
+
+  it("reports the cases of a file that went over the allowance instead of dropping them", async () => {
+    const limited = await startTestApi({ GENERATIONS_PER_HOUR: 1 }, { llm: model.llm });
+    try {
+      const ada = await limited.signedIn();
+      const cases = [1, 2].map((n) => ({ jd: `${JD}\n- Skill ${n}`, company_url: "https://acme.example/", days: 3 }));
+      const { body } = await ada.post("/api/jobs/batch").send({ cases }).expect(202);
+      expect(body.results.map((r: { outcome: string }) => r.outcome)).toEqual(["started", "limited"]);
+    } finally {
+      await limited.close();
+    }
+  }, 120_000);
+
+  it("limits how many kits one account can have generating at once", async () => {
+    const limited = await startTestApi({ MAX_ACTIVE_JOBS: 1 });
+    try {
+      const ada = await limited.signedIn();
+      await ada.post("/api/jobs").send(newJob).expect(202);
+      await limited.db.jobs.updateMany({}, { $set: { active: true, status: "running" } });
+      const refused = await ada.post("/api/jobs").send({ ...newJob, jd: `${JD}\n- Other` }).expect(429);
+      expect(refused.body.error.code).toBe("TOO_MANY_ACTIVE_JOBS");
+    } finally {
+      await limited.close();
+    }
+  }, 120_000);
+});
+
+describe("exporting a kit", () => {
+  it("downloads the kit alone, in the Appendix A structure", async () => {
+    const { validateKit } = await import("../src/kit/validate");
+    const ada = await api.signedIn();
+    await ada.post("/api/jobs").send(newJob).expect(202);
+    await api.runner.idle();
+    const [kit] = (await ada.get("/api/kits")).body.kits;
+
+    const response = await ada.get(`/api/kits/${kit.id}/export`).expect(200);
+    expect(response.headers["content-disposition"]).toMatch(/^attachment; filename="kit-.*\.json"$/);
+    expect(validateKit(JSON.parse(response.text))).toMatchObject({ ok: true });
+    expect(Object.keys(JSON.parse(response.text))).toEqual(expect.arrayContaining(["source", "company_brief", "role", "questions", "flashcards", "schedule", "coverage"]));
+
+    const bob = await api.signedIn();
+    await bob.get(`/api/kits/${kit.id}/export`).expect(404);
+  });
+});

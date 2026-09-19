@@ -7,6 +7,7 @@ import { fingerprintOf, type JobRunner } from "../jobs/runner";
 import type { KitRepository } from "../persistence/kits";
 import type { Database, JobDoc } from "../persistence/mongo";
 import { ApiError, parse } from "./errors";
+import type { UsageLimiter } from "./limits";
 
 const MAX_BATCH = 10;
 
@@ -57,7 +58,7 @@ type StartResult =
   | { outcome: "kit_exists"; kitId: string };
 
 /** Mounted behind requireAuth. */
-export function jobsRouter(db: Database, kits: KitRepository, runner: JobRunner): Router {
+export function jobsRouter(db: Database, kits: KitRepository, runner: JobRunner, limits: UsageLimiter, maxActiveJobs: number): Router {
   const router = Router();
   const userId = (locals: Record<string, unknown>) => locals.userId as ObjectId;
 
@@ -71,6 +72,12 @@ export function jobsRouter(db: Database, kits: KitRepository, runner: JobRunner)
       const existing = await kits.findByFingerprint(owner, fingerprint);
       if (existing) return { outcome: "kit_exists", kitId: existing.id };
     }
+
+    // Only a job that will really run is charged for: duplicates and existing kits cost nothing.
+    if ((await db.jobs.countDocuments({ userId: owner, active: true })) >= maxActiveJobs) {
+      throw new ApiError(429, "TOO_MANY_ACTIVE_JOBS", `You already have ${maxActiveJobs} kits being generated. Wait for one to finish.`);
+    }
+    await limits.spend(owner, "generation");
 
     const now = new Date();
     const job: JobDoc = {
@@ -119,7 +126,13 @@ export function jobsRouter(db: Database, kits: KitRepository, runner: JobRunner)
         results.push({ index, outcome: "invalid" as const, issues });
         continue;
       }
-      results.push({ index, ...respond(await start(userId(response.locals), parsed.data, batchId)) });
+      try {
+        results.push({ index, ...respond(await start(userId(response.locals), parsed.data, batchId)) });
+      } catch (error) {
+        // Over the allowance part-way through a file: the rest are reported, not silently dropped.
+        if (!(error instanceof ApiError) || error.status !== 429) throw error;
+        results.push({ index, outcome: "limited" as const, message: error.message });
+      }
     }
     response.status(202).json({ batchId, results });
   });

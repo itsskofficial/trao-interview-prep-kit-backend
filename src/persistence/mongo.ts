@@ -59,10 +59,17 @@ export interface JobDoc {
   updatedAt: Date;
 }
 
+export interface UsageDoc {
+  userId: ObjectId;
+  kind: "generation" | "regeneration";
+  at: Date;
+}
+
 export interface Database {
   users: Collection<UserDoc>;
   kits: Collection<KitDoc>;
   jobs: Collection<JobDoc>;
+  usage: Collection<UsageDoc>;
   close(): Promise<void>;
 }
 
@@ -77,6 +84,7 @@ export async function connectDatabase(uri: string, name: string): Promise<Databa
     users: db.collection<UserDoc>("users"),
     kits: db.collection<KitDoc>("kits"),
     jobs: db.collection<JobDoc>("jobs"),
+    usage: db.collection<UsageDoc>("usage"),
     close: () => client.close(),
   };
 
@@ -85,6 +93,8 @@ export async function connectDatabase(uri: string, name: string): Promise<Databa
     database.kits.createIndex({ userId: 1, updatedAt: -1 }),
     database.kits.createIndex({ userId: 1, fingerprint: 1 }),
     database.jobs.createIndex({ userId: 1, createdAt: -1 }),
+    database.usage.createIndex({ userId: 1, at: -1 }),
+    database.usage.createIndex({ at: 1 }, { expireAfterSeconds: 2 * 60 * 60 }),
     database.jobs.createIndex({ userId: 1, fingerprint: 1 }, { unique: true, partialFilterExpression: { active: true } }),
   ]);
   return database;

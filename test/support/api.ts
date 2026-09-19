@@ -51,7 +51,7 @@ export async function startTestApi(overrides: Partial<Config> = {}, pipeline: Pa
     },
     async reset() {
       await Promise.all([runner.idle(), regenerator.idle()]);
-      await Promise.all([db.users.deleteMany({}), db.kits.deleteMany({}), db.jobs.deleteMany({})]);
+      await Promise.all([db.users.deleteMany({}), db.kits.deleteMany({}), db.jobs.deleteMany({}), db.usage.deleteMany({})]);
     },
     async close() {
       await Promise.all([runner.idle(), regenerator.idle()]);

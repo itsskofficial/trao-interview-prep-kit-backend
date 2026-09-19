@@ -26,6 +26,7 @@ process.env.LLM_PROVIDER ??= "offline";
 process.env.NODE_ENV ??= "development";
 // End-to-end tests register a fresh account per test, all from one address.
 process.env.AUTH_ATTEMPTS_PER_WINDOW ??= "100000";
+process.env.GENERATIONS_PER_HOUR ??= "100000";
 
 const { startFixtureServer } = await import("../fixtures/server");
 await startFixtureServer(Number(process.env.FIXTURE_PORT ?? 8099))

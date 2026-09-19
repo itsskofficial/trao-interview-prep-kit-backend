@@ -9,6 +9,7 @@ import { RegenerationRefused, type Regenerator } from "../builder/regenerator";
 import { QuestionCategorySchema } from "../kit/schema";
 import type { KitRepository, StoredKit } from "../persistence/kits";
 import { ApiError, parse } from "./errors";
+import type { UsageLimiter } from "./limits";
 
 const text = (max: number) => z.string().trim().max(max, `At most ${max} characters.`);
 const requirementIds = z.array(z.string().min(1)).max(50);
@@ -58,7 +59,7 @@ const RegenerateSchema = z.discriminatedUnion("section", [
  * touches only what it names, so two of them cannot overwrite each other.
  * Mounted behind requireAuth, beside the read-only kit routes.
  */
-export function builderRouter(kits: KitRepository, regenerator: Regenerator): Router {
+export function builderRouter(kits: KitRepository, regenerator: Regenerator, limits: UsageLimiter): Router {
   const router = Router({ mergeParams: true });
 
   /** Applies a pure builder operation to the stored kit and answers with the result. */
@@ -139,6 +140,8 @@ export function builderRouter(kits: KitRepository, regenerator: Regenerator): Ro
 
   router.post("/:id/regenerate", async (request, response) => {
     const body = parse(RegenerateSchema, request.body);
+    // The schedule is arithmetic and free; the other sections call the model.
+    if (body.section !== "schedule") await limits.spend(response.locals.userId as ObjectId, "regeneration");
     const saved = await guarded(() => regenerator.start(response.locals.userId as ObjectId, request.params.id, body));
     // 202: the kit now says a section is regenerating; poll the kit to see it finish. The schedule is instant.
     response.status(body.section === "schedule" ? 200 : 202).json(present(saved));

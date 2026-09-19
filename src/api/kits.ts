@@ -18,6 +18,15 @@ export function kitsRouter(kits: KitRepository): Router {
     response.json(kit);
   });
 
+  /** The kit alone, in exactly the Appendix A structure, as a file. */
+  router.get("/:id/export", async (request, response) => {
+    const stored = await kits.get(userId(response.locals), request.params.id);
+    if (!stored) throw ApiError.notFound("Kit");
+    const name = `${stored.kit.source.company} ${stored.kit.source.role}`.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "kit";
+    response.setHeader("Content-Disposition", `attachment; filename="kit-${name.slice(0, 60)}.json"`);
+    response.type("application/json").send(JSON.stringify(stored.kit, null, 2));
+  });
+
   router.delete("/:id", async (request, response) => {
     const removed = await kits.remove(userId(response.locals), request.params.id);
     if (!removed) throw ApiError.notFound("Kit");

@@ -25,6 +25,10 @@ const EnvSchema = z.object({
   // Signs session tokens. The development default is refused in production (see loadConfig).
   JWT_SECRET: z.string().default("development-only-secret-change-me"),
   SESSION_DAYS: z.coerce.number().int().positive().default(7),
+  // Kits and section regenerations one account may start per hour, and jobs it may have running at once.
+  // The model quota is a free tier shared by every user of a public deployment.
+  GENERATIONS_PER_HOUR: z.coerce.number().int().positive().default(15),
+  MAX_ACTIVE_JOBS: z.coerce.number().int().positive().default(5),
   // Register and sign-in attempts allowed per address per 15 minutes.
   AUTH_ATTEMPTS_PER_WINDOW: z.coerce.number().int().positive().default(30),
   // The browser origin allowed to call the API with credentials. The Next.js app proxies /api, so this is its own origin.
