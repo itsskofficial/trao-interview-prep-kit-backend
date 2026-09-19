@@ -1,0 +1,122 @@
+{
+  "acme-detailed-process": {
+    "must": [
+      [
+        "node.js"
+      ],
+      [
+        "postgresql"
+      ],
+      [
+        "event-driven"
+      ],
+      [
+        "mentoring"
+      ]
+    ],
+    "nice": [
+      [
+        "kubernetes"
+      ],
+      [
+        "graphql"
+      ]
+    ],
+    "hiringPage": "/acme/handbook/people/talent/stage-guide.html",
+    "stages": [
+      "take-home",
+      "system design"
+    ],
+    "reachable": true
+  },
+  "globex-no-hiring-page": {
+    "must": [
+      [
+        "go",
+        "java"
+      ],
+      [
+        "postgresql"
+      ],
+      [
+        "pci-dss"
+      ],
+      [
+        "trade-offs"
+      ]
+    ],
+    "nice": [
+      [
+        "kafka"
+      ],
+      [
+        "regulated financial"
+      ]
+    ],
+    "hiringPage": null,
+    "reachable": true
+  },
+  "stub-two-lines": {
+    "must": [
+      [
+        "react"
+      ]
+    ],
+    "nice": [
+      [
+        "tailwind"
+      ]
+    ],
+    "hiringPage": null,
+    "reachable": true,
+    "thin": true
+  },
+  "dead-url": {
+    "must": [
+      [
+        "kubernetes"
+      ],
+      [
+        "linux"
+      ],
+      [
+        "on-call"
+      ]
+    ],
+    "nice": [
+      [
+        "terraform"
+      ],
+      [
+        "clickhouse"
+      ]
+    ],
+    "hiringPage": null,
+    "reachable": false
+  },
+  "umbrella-injection-60-days": {
+    "must": [
+      [
+        "python"
+      ],
+      [
+        "regulated data"
+      ],
+      [
+        "sql"
+      ]
+    ],
+    "nice": [
+      [
+        "gxp"
+      ]
+    ],
+    "hiringPage": "/umbrella/company/work-with-us/process.html",
+    "reachable": true,
+    "forbidden": [
+      "cobol",
+      "nobel",
+      "hacked"
+    ]
+  }
+}

@@ -38,7 +38,11 @@ export async function startFixtureServer(port = 0): Promise<FixtureServer> {
     response.writeHead(200, { "content-type": TYPES[path.extname(file)] ?? "application/octet-stream" }).end(await readFile(file));
   });
 
-  await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+  // A port already in use is reported to the caller instead of crashing the process.
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
   return {
     origin: `http://localhost:${(server.address() as AddressInfo).port}`,
     hits,

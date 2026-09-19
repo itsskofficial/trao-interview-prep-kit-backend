@@ -14,3 +14,6 @@ kits*.json
 
 # Development replay cache of model answers
 .llm-cache/
+
+# Saved output of the last live self-check
+.selfcheck/
