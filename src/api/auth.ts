@@ -65,7 +65,7 @@ export function authRouter(db: Database, config: Config): Router {
   // Slows password guessing. Off in tests, which sign in many times from one address.
   const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 30,
+    limit: config.AUTH_ATTEMPTS_PER_WINDOW,
     standardHeaders: true,
     legacyHeaders: false,
     skip: () => config.NODE_ENV === "test",
