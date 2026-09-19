@@ -17,6 +17,15 @@ const EnvSchema = z.object({
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   LLM_REPLAY_CACHE: z.string().default(""),
   ALLOW_PRIVATE_URLS: z.enum(["true", "false", ""]).default(""),
+  // HTTP API
+  PORT: z.coerce.number().int().positive().default(4000),
+  MONGODB_URI: z.string().default("mongodb://127.0.0.1:27017"),
+  MONGODB_DB: z.string().default("interview_prep_kit"),
+  // Signs session tokens. The development default is refused in production (see loadConfig).
+  JWT_SECRET: z.string().default("development-only-secret-change-me"),
+  SESSION_DAYS: z.coerce.number().int().positive().default(7),
+  // The browser origin allowed to call the API with credentials. The Next.js app proxies /api, so this is its own origin.
+  FRONTEND_ORIGIN: z.string().default("http://localhost:3000"),
   // Batch command: how many cases run at once, and how long one case may take before it is recorded as timed out.
   BATCH_CONCURRENCY: z.coerce.number().int().min(1).max(5).default(2),
   CASE_TIMEOUT_MS: z.coerce.number().int().positive().default(170_000),
@@ -24,8 +33,14 @@ const EnvSchema = z.object({
 
 export type Config = z.infer<typeof EnvSchema>;
 
+const DEVELOPMENT_SECRET = "development-only-secret-change-me";
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  return EnvSchema.parse(env);
+  const config = EnvSchema.parse(env);
+  if (config.NODE_ENV === "production" && (config.JWT_SECRET === DEVELOPMENT_SECRET || config.JWT_SECRET.length < 32)) {
+    throw new Error("JWT_SECRET must be set to a random value of at least 32 characters in production.");
+  }
+  return config;
 }
 
 /**
