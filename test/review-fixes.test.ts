@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { AddressInfo } from "node:net";
 import { promisify } from "node:util";
 import type { ObjectId } from "mongodb";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -110,10 +111,33 @@ describe("the hourly allowance", () => {
   beforeEach(() => api.reset());
 
   it("holds when many requests arrive at the same instant", async () => {
-    const ada = await api.signedIn();
-    const responses = await Promise.all(Array.from({ length: 12 }, (_, n) => ada.post("/api/jobs").send({ jd: `${JD}\n- Skill ${n}`, company_url: "https://acme.example/", days: 3 })));
-    expect(responses.filter((response) => response.status === 202).length).toBeLessThanOrEqual(3);
-    expect(responses.filter((response) => response.status === 429).length).toBeGreaterThanOrEqual(9);
+    // One real listening server: supertest otherwise opens a throwaway server per request, and a dozen
+    // of those at once get their connections reset on a busy CI runner.
+    const server = api.app.listen(0);
+    try {
+      const { port } = server.address() as AddressInfo;
+      const origin = `http://127.0.0.1:${port}`;
+      const registered = await fetch(`${origin}/api/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: "burst@example.com", password: "correct horse battery" }),
+      });
+      const cookie = registered.headers.get("set-cookie")!.split(";")[0]!;
+
+      const statuses = await Promise.all(
+        Array.from({ length: 12 }, (_, n) =>
+          fetch(`${origin}/api/jobs`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Cookie: cookie },
+            body: JSON.stringify({ jd: `${JD}\n- Skill ${n}`, company_url: "https://acme.example/", days: 3 }),
+          }).then((response) => response.status),
+        ),
+      );
+      expect(statuses.filter((status) => status === 202).length).toBeLessThanOrEqual(3);
+      expect(statuses.filter((status) => status === 429).length).toBeGreaterThanOrEqual(9);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it("gives the charge back when a regeneration is refused", async () => {
