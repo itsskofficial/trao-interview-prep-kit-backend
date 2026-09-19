@@ -37,7 +37,7 @@ const CATEGORY_BRIEF: Record<QuestionCategory, string> = {
 };
 
 const SHARED_RULES = `Rules:
-- Use only the requirement ids you are given. Every question lists the ids of the requirements it covers.
+- Use only the requirement ids you are given. Every question lists the ids of the requirements it covers; use an empty list only if it covers none of them.
 - Every listed requirement must be covered by at least one question.
 - "difficulty" is 1 (warm-up), 2 (standard) or 3 (hard).
 - "answer_outline" is a short outline of a strong answer, not a full essay.
@@ -61,18 +61,22 @@ export interface GenerateQuestionsInput {
  */
 export async function generateQuestions(input: GenerateQuestionsInput, llm: LlmClient): Promise<DraftQuestion[]> {
   const { category, requirements, context, guidance, closingGaps = false } = input;
-  if (requirements.length === 0) return [];
+  // Company-fit questions are about the company, so they may stand without a requirement. Every other category needs one.
+  const needsRequirement = category !== "company-fit";
+  if (requirements.length === 0 && (needsRequirement || !guidance)) return [];
 
-  const target = closingGaps ? requirements.length : Math.min(12, Math.max(3, Math.ceil(requirements.length * 1.5)));
+  const target = closingGaps
+    ? requirements.length
+    : TARGET_BY_CATEGORY[category](requirements.length);
   const requirementList = requirements.map((r) => `${r.id} [${r.priority}] ${r.text}`).join("\n");
 
   const prompt = [
     `Role: ${context.roleTitle || "not stated"}${context.seniority ? ` (${context.seniority})` : ""}`,
     closingGaps
       ? `These requirements have no question yet. Write exactly one question for each of them (${target} in total).`
-      : `Write about ${target} questions covering these requirements. Spend more questions on [must] requirements.`,
+      : `Write about ${target} questions${requirements.length > 0 ? " covering these requirements. Spend more questions on [must] requirements." : "."}`,
     guidance ?? "",
-    wrapUntrusted("requirements", requirementList),
+    requirements.length > 0 ? wrapUntrusted("requirements", requirementList) : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -94,8 +98,16 @@ export async function generateQuestions(input: GenerateQuestionsInput, llm: LlmC
       difficulty: question.difficulty,
       origin: "generated" as const,
     }))
-    .filter((question) => question.requirement_ids.length > 0);
+    .filter((question) => !needsRequirement || question.requirement_ids.length > 0);
 }
+
+/** How many questions to ask for, given how many requirements the category has. */
+const TARGET_BY_CATEGORY: Record<QuestionCategory, (requirements: number) => number> = {
+  technical: (n) => Math.min(12, Math.max(3, Math.ceil(n * 1.5))),
+  behavioural: (n) => Math.min(8, Math.max(2, Math.ceil(n * 1.5))),
+  "system-design": () => 3,
+  "company-fit": () => 4,
+};
 
 /** Technical and domain requirements are tested by technical questions; behavioural ones by behavioural questions. */
 export function categoryFor(requirement: Requirement): QuestionCategory {

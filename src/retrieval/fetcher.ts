@@ -19,6 +19,8 @@ export type FetchResult =
   | { ok: true; url: string; status: number; contentType: string; body: string }
   | { ok: false; url: string; reason: SkipReason; detail: string; status?: number };
 
+export type Accept = "html" | "xml" | "json";
+
 /** A single HTTP exchange either finishes or points somewhere else. */
 type Exchange = FetchResult | { redirectTo: string };
 
@@ -37,11 +39,18 @@ export interface FetcherOptions {
 }
 
 export interface PageFetcher {
-  fetchPage(url: string, accept?: "html" | "xml"): Promise<FetchResult>;
+  fetchPage(url: string, accept?: Accept): Promise<FetchResult>;
   close(): Promise<void>;
 }
 
-const ACCEPTED: Record<"html" | "xml", RegExp> = {
+const ACCEPT_HEADER: Record<Accept, string> = {
+  html: "text/html,application/xhtml+xml",
+  xml: "application/xml,text/xml",
+  json: "application/json",
+};
+
+const ACCEPTED: Record<Accept, RegExp> = {
+  json: /^application\/json\b/i,
   html: /^(text\/html|application\/xhtml\+xml|text\/plain)\b/i,
   xml: /^(application\/xml|text\/xml|application\/rss\+xml|application\/atom\+xml|text\/plain)\b/i,
 };
@@ -93,14 +102,14 @@ export function createPageFetcher(options: FetcherOptions): PageFetcher {
     return run;
   }
 
-  async function requestOnce(url: URL, accept: "html" | "xml"): Promise<Exchange> {
+  async function requestOnce(url: URL, accept: Accept): Promise<Exchange> {
     let response;
     try {
       response = await undiciFetch(url, {
         dispatcher,
         redirect: "manual",
         signal: AbortSignal.timeout(timeoutMs),
-        headers: { "User-Agent": USER_AGENT, Accept: accept === "html" ? "text/html,application/xhtml+xml" : "application/xml,text/xml" },
+        headers: { "User-Agent": USER_AGENT, Accept: ACCEPT_HEADER[accept] },
       });
     } catch (error) {
       return classifyFailure(url.href, error);
@@ -147,7 +156,7 @@ export function createPageFetcher(options: FetcherOptions): PageFetcher {
   }
 
   /** One URL, with backoff on the failures worth retrying: 429, 5xx, timeouts and network errors. */
-  async function requestWithRetry(url: URL, accept: "html" | "xml"): Promise<Exchange> {
+  async function requestWithRetry(url: URL, accept: Accept): Promise<Exchange> {
     for (let attempt = 0; ; attempt++) {
       const result = await paced(url, () => requestOnce(url, accept));
       if ("redirectTo" in result || result.ok || attempt >= retries || !isRetryable(result)) return result;
@@ -172,7 +181,7 @@ export function createPageFetcher(options: FetcherOptions): PageFetcher {
     return cached;
   }
 
-  async function fetchPage(input: string, accept: "html" | "xml" = "html"): Promise<FetchResult> {
+  async function fetchPage(input: string, accept: Accept = "html"): Promise<FetchResult> {
     let current = input;
     for (let hop = 0; hop <= maxRedirects; hop++) {
       const checked = checkUrl(current, allowPrivate);

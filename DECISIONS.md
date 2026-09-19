@@ -79,3 +79,24 @@ A link called "Careers" proves nothing, so a page counts as the hiring page only
 If the company URL itself fails, the site is recorded as unreachable. There is no fallback to the origin root: when several companies are served under one origin (as the evaluation fixtures may be), the root is a different site, and a brief about the wrong company is worse than an honest "could not be read".
 
 The repository ships five fixture companies under `fixtures/sites` that mirror the published test set: a process two clicks deep at an unguessable path, a site with no hiring page, a process inside a blog post next to a JavaScript-only careers page and a robots-disallowed section, pages with planted instructions, and a site whose careers page answers 500.
+
+## 16. The brief is written from what was retrieved, or not by the model at all
+
+One model call turns the homepage, the about page, the hiring page and any relevant public discussion into a summary, what the company does, the hiring stages and interview insights. Then the same rule as for requirements applies: a stage survives only if at least half of its significant words appear in the hiring page, and an insight only if they appear in the discussion text. With no hiring page, stages are forced empty whatever the model says. With nothing retrieved at all, no call is made: code writes a brief that says nothing could be found and why, because a model handed a company name and an empty page will describe the company anyway.
+
+`company_brief.sources` lists a URL only if something from it ended up in the kit. A live run showed why: searching Hacker News for a fixture company called Hooli returned three hits that named it and mentioned interviews, all about a television show. The model correctly used none of them, so they are not cited, and the research log says that results matched the name but were not about this company.
+
+## 17. Public discussion: two official APIs, and two obvious sources left out
+
+Hacker News (Algolia API) and Stack Exchange Workplace, both keyless and open to programmatic use, queried for the exact company name plus "interview", through the same fetcher as everything else (robots.txt, limits, timeout). A hit is kept only if it names the company and uses interviewing vocabulary. Reddit and Glassdoor are where most of this discussion lives, but their robots.txt and terms forbid unauthenticated automated access, and the brief says to respect both. Each source is logged as used, empty or skipped, and none can fail a run. The search needs a company name, which often only becomes known from the crawl, which is why it runs after it.
+
+## 18. Which question calls are made is decided by code, from what was found
+
+`planQuestionCalls` is a pure function from (requirements, seniority, published stages, brief) to a list of calls, each with its own category instructions, its own subset of requirements and its own guidance:
+
+- technical: technical and domain requirements. A published take-home adds "make one question a take-home style task"; pair programming or a live technical interview adds a live scenario.
+- behavioural: behavioural requirements only. A published values or hiring-manager round adds probing follow-ups.
+- system-design: only if the company publishes a design round, the posting asks for design experience, or the role is senior.
+- company-fit: only if something about the company was actually retrieved; its questions may stand without a requirement.
+
+So a company that publishes a take-home and a design round gets different calls with different instructions from one that says nothing, and a dead company URL gets no company-fit call at all. A typical kit costs seven model calls (extract, brief, up to four categories, flashcards) plus one per category with gaps. After extraction no step can fail the kit: a failed section leaves a note and an empty section, and if every question call failed, the coverage backstop would still cover every must-have.

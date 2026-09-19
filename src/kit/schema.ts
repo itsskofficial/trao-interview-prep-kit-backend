@@ -103,6 +103,8 @@ export const KitSchema = z.object({
   }),
   /** Extension: hiring stages found on the company site, in order. Empty when none were published. */
   hiring_stages: z.array(z.string()).optional(),
+  /** Extension: what public discussion says about interviewing at this company. Empty when none was found. */
+  interview_insights: z.array(z.string()).optional(),
   /** Extension: every source attempted during research. */
   research_log: z.array(ResearchLogEntrySchema).optional(),
   /** Extension: plain-language honesty notes, e.g. a thin description or an unreachable site. */

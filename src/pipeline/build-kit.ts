@@ -1,11 +1,15 @@
 import { closeCoverageGaps } from "../coverage/coverage";
 import { EmptyDescriptionError, extractRole } from "../extraction/extract";
+import { writeCompanyBrief, type BriefResult } from "../generation/brief";
+import { generateFlashcards } from "../generation/flashcards";
+import { planQuestionCalls } from "../generation/plan";
 import { categoryFor, generateQuestions, type DraftQuestion, type QuestionContext } from "../generation/questions";
 import { idAllocator } from "../kit/ids";
 import type { Kit, Question, QuestionCategory, Requirement } from "../kit/schema";
 import { validateKit } from "../kit/validate";
 import { LlmError, type LlmClient } from "../llm/types";
 import { crawlCompanySite, type CrawledPage } from "../retrieval/crawl";
+import { createDiscussionSearch, type DiscussionSearch } from "../retrieval/discussion";
 import type { PageFetcher } from "../retrieval/fetcher";
 import { allocateSchedule } from "../scheduling/allocate";
 import { PipelineError } from "./errors";
@@ -16,7 +20,7 @@ export interface PipelineInput {
   days: number;
 }
 
-export type PipelineStep = "extract" | "crawl" | "questions" | "coverage" | "schedule" | "validate";
+export type PipelineStep = "extract" | "crawl" | "discussion" | "brief" | "questions" | "coverage" | "flashcards" | "schedule" | "validate";
 
 export interface ProgressEvent {
   step: PipelineStep;
@@ -27,6 +31,8 @@ export interface ProgressEvent {
 export interface PipelineDeps {
   llm: LlmClient;
   fetcher: PageFetcher;
+  /** Defaults to the public sources in retrieval/discussion, reached through `fetcher`. */
+  searchDiscussion?: DiscussionSearch;
   now?: () => Date;
   onProgress?: (event: ProgressEvent) => void;
 }
@@ -34,9 +40,14 @@ export interface PipelineDeps {
 /**
  * The one path from a job description to a kit. The HTTP API and the batch
  * command both call this; there is no second implementation.
+ *
+ * Each step uses what the previous ones actually found. Only extraction can
+ * fail the whole kit: after it, a step that fails costs its own section and
+ * leaves a note, and coverage is guaranteed by code either way.
  */
 export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promise<Kit> {
   const { llm, fetcher, now = () => new Date(), onProgress = () => undefined } = deps;
+  const searchDiscussion = deps.searchDiscussion ?? createDiscussionSearch(fetcher);
   const notes: string[] = [];
 
   // 1. Extract. Pasted text needs no retrieval.
@@ -46,7 +57,7 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
     if (error instanceof EmptyDescriptionError) throw new PipelineError("JD_EMPTY", error.message);
     throw toPipelineError(error);
   });
-  onProgress({ step: "extract", status: "done", detail: `${role.requirements.length} requirements` });
+  onProgress({ step: "extract", status: "done", detail: `${role.requirements.length} requirement(s)` });
   if (role.thin) {
     notes.push(
       `The job description states only ${role.requirements.length} requirement(s), so this kit is deliberately thin. Nothing was added that the posting does not say.`,
@@ -54,7 +65,6 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
   }
 
   // 2. Crawl the company site. A homepage is only useful once its links have been ranked and followed.
-  //    A site that cannot be read costs the research, not the kit.
   onProgress({ step: "crawl", status: "started" });
   const crawl = await crawlCompanySite(input.companyUrl, fetcher);
   if (!crawl.reachable) {
@@ -62,28 +72,67 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
   } else if (!crawl.hiring) {
     notes.push("The company site does not publish how it hires, so the questions are not tailored to a known interview format.");
   }
-  const researchPages = [crawl.home, crawl.about, crawl.hiring].filter((page): page is CrawledPage => Boolean(page?.text));
   onProgress({
     step: "crawl",
     status: crawl.reachable ? "done" : "failed",
     detail: crawl.reachable ? `${crawl.pages.length} page(s) read, hiring page ${crawl.hiring ? "found" : "not found"}` : crawl.failure,
   });
 
-  // 3. Questions, one call per category that has requirements.
+  // 3. Public discussion of how this company interviews. Needs a company name, which may only be known after the crawl.
+  const company = role.company || crawl.siteName;
+  onProgress({ step: "discussion", status: "started" });
+  const discussion = await searchDiscussion(company);
+  onProgress({
+    step: "discussion",
+    status: discussion.snippets.length > 0 ? "done" : "skipped",
+    detail: discussion.snippets.length > 0 ? `${discussion.snippets.length} relevant result(s)` : "nothing relevant found",
+  });
+
+  // 4. Brief and hiring stages, from what was retrieved and nothing else.
+  onProgress({ step: "brief", status: "started" });
+  const briefInput = { company, home: crawl.home, about: crawl.about, hiring: crawl.hiring, discussion: discussion.snippets, siteFailure: crawl.failure };
+  const researched = await writeCompanyBrief(briefInput, llm).catch((error: unknown): BriefResult => {
+    notes.push(`The company brief could not be written: ${errorMessage(error)}`);
+    return {
+      brief: { summary: "The company brief could not be generated. Regenerate this section to try again.", what_they_do: "", sources: [], origin: "generated" },
+      hiringStages: [],
+      interviewInsights: [],
+    };
+  });
+  const companyKnown = researched.brief.sources.length > 0;
+  const discussionLog = [...discussion.log];
+  if (discussion.snippets.length > 0 && researched.interviewInsights.length === 0) {
+    discussionLog.push({
+      source: "public-discussion",
+      outcome: "empty",
+      reason: `${discussion.snippets.length} search result(s) mentioned the company name, but none was clearly about interviewing at this company, so none was used.`,
+    });
+  }
+  onProgress({ step: "brief", status: "done", detail: `${researched.hiringStages.length} hiring stage(s) published` });
+
+  // 5. Questions. Which calls are made, and with what instructions, depends on steps 1-4.
   onProgress({ step: "questions", status: "started" });
+  const context: QuestionContext = { roleTitle: role.title, seniority: role.seniority };
   const nextQuestionId = idAllocator("q");
   const questions: Question[] = [];
-  const context: QuestionContext = { roleTitle: role.title, seniority: role.seniority };
-  for (const category of REQUIREMENT_CATEGORIES) {
-    const requirements = role.requirements.filter((r) => categoryFor(r) === category);
-    const drafts = await generateQuestions({ category, requirements, context }, llm).catch((error: unknown) =>
-      degrade(error, `${category} questions`, notes),
-    );
+  const plan = planQuestionCalls({
+    title: role.title,
+    seniority: role.seniority,
+    requirements: role.requirements,
+    hiringStages: researched.hiringStages,
+    interviewInsights: researched.interviewInsights,
+    brief: companyKnown ? researched.brief : undefined,
+  });
+  for (const call of plan) {
+    const drafts = await generateQuestions({ ...call, context }, llm).catch((error: unknown) => {
+      notes.push(`Could not generate ${call.category} questions: ${errorMessage(error)}`);
+      return [] as DraftQuestion[];
+    });
     questions.push(...drafts.map((draft) => ({ id: nextQuestionId(), ...draft })));
   }
-  onProgress({ step: "questions", status: "done", detail: `${questions.length} questions` });
+  onProgress({ step: "questions", status: "done", detail: `${questions.length} question(s) from ${plan.map((call) => call.category).join(", ") || "no calls"}` });
 
-  // 4. Second pass. Code finds the requirements no question covers, the model is asked for
+  // 6. Second pass. Code finds the requirements no question covers, the model is asked for
   //    those only, and code checks again. Must-haves still open get a question written by code.
   onProgress({ step: "coverage", status: "started" });
   const coverage = await closeCoverageGaps(role.requirements, questions, (gaps) => generateForGaps(gaps, context, llm));
@@ -98,14 +147,29 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
     detail: `${coverage.passes} pass(es), ${coverage.added.length} question(s) added, ${coverage.uncovered.length} nice-to-have uncovered`,
   });
 
-  // 5. Schedule: arithmetic, never the model.
+  // 7. Flashcards.
+  onProgress({ step: "flashcards", status: "started" });
+  const nextFlashcardId = idAllocator("f");
+  const companyFacts = companyKnown
+    ? [`What they do: ${researched.brief.what_they_do}`, ...researched.hiringStages.map((stage, index) => `Hiring stage ${index + 1}: ${stage}`)]
+    : [];
+  const flashcards = (
+    await generateFlashcards({ roleTitle: role.title, requirements: role.requirements, companyFacts }, llm).catch((error: unknown) => {
+      notes.push(`Flashcards could not be generated: ${errorMessage(error)}`);
+      return [];
+    })
+  ).map((draft) => ({ id: nextFlashcardId(), ...draft }));
+  onProgress({ step: "flashcards", status: "done", detail: `${flashcards.length} card(s)` });
+
+  // 8. Schedule: arithmetic, never the model.
   onProgress({ step: "schedule", status: "started" });
   const schedule = allocateSchedule({ days: input.days, questions, requirements: role.requirements });
   onProgress({ step: "schedule", status: "done" });
 
+  const researchPages = [crawl.home, crawl.about, crawl.hiring].filter((page): page is CrawledPage => Boolean(page?.text));
   const kit: Kit = {
     source: {
-      company: role.company || crawl.siteName,
+      company,
       company_url: input.companyUrl,
       role: role.title,
       location: role.location,
@@ -113,7 +177,7 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
       researched_at: now().toISOString(),
       pages_used: researchPages.map((page) => page.url),
     },
-    company_brief: { summary: "", what_they_do: "", sources: [] },
+    company_brief: researched.brief,
     role: {
       title: role.title,
       seniority: role.seniority,
@@ -121,15 +185,16 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
       requirements: role.requirements,
     },
     questions,
-    flashcards: [],
+    flashcards,
     schedule,
     coverage: { uncovered_requirement_ids: coverage.uncovered.map((r) => r.id), passes: coverage.passes },
-    hiring_stages: [],
-    research_log: crawl.log,
+    hiring_stages: researched.hiringStages,
+    interview_insights: researched.interviewInsights,
+    research_log: [...crawl.log, ...discussionLog],
     notes,
   };
 
-  // 6. Nothing leaves the pipeline without passing the structure check.
+  // 9. Nothing leaves the pipeline without passing the structure check.
   onProgress({ step: "validate", status: "started" });
   const validation = validateKit(kit);
   if (!validation.ok) {
@@ -140,7 +205,7 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
   return validation.kit;
 }
 
-/** Categories whose questions are driven by requirements. */
+/** Categories whose questions exist to cover requirements. */
 const REQUIREMENT_CATEGORIES = ["technical", "behavioural"] satisfies QuestionCategory[];
 
 /** Gap questions still come from the right kind of call: technical gaps and behavioural gaps are asked separately. */
@@ -151,13 +216,6 @@ async function generateForGaps(gaps: Requirement[], context: QuestionContext, ll
     drafts.push(...(await generateQuestions({ category, requirements, context, closingGaps: true }, llm)));
   }
   return drafts;
-}
-
-/** A generation step that fails costs its section, not the kit. A model that is down entirely still fails the case. */
-function degrade(error: unknown, what: string, notes: string[]): [] {
-  if (error instanceof LlmError && error.code === "LLM_UNAVAILABLE") throw toPipelineError(error);
-  notes.push(`Could not generate ${what}: ${errorMessage(error)}`);
-  return [];
 }
 
 function toPipelineError(error: unknown): PipelineError {
