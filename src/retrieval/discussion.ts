@@ -65,12 +65,24 @@ const braveSearch = (apiKey: string): Source => ({
   url: (query) => `https://api.search.brave.com/res/v1/web/search?count=10&q=${encodeURIComponent(`${query} process experience`)}`,
   headers: { "X-Subscription-Token": apiKey },
   read: (body) =>
-    ((body as { web?: { results?: BraveResult[] } }).web?.results ?? []).flatMap((result) =>
+    braveResults(body).flatMap((result) =>
       typeof result.url === "string" && /^https?:\/\//.test(result.url) ? [{ source: "web-search", url: result.url, text: stripTags(`${result.title ?? ""} - ${result.description ?? ""}`) }] : [],
     ),
 });
 
 interface BraveResult { title?: string; url?: string; description?: string }
+
+/**
+ * A search with no web results leaves `web` out, and that is an honest "nothing found". Anything else without a list of
+ * results is not the response this was written for, and saying "nothing found" about it would be a guess: it throws, and the
+ * source is logged as unreadable.
+ */
+function braveResults(body: unknown): BraveResult[] {
+  const answer = body as { type?: unknown; web?: { results?: unknown } } | null;
+  if (answer && typeof answer === "object" && Array.isArray(answer.web?.results)) return answer.web.results as BraveResult[];
+  if (answer && typeof answer === "object" && answer.type === "search" && answer.web === undefined) return [];
+  throw new Error("Unexpected web search response.");
+}
 interface HnHit { objectID: string; title?: string; story_title?: string; comment_text?: string; story_text?: string }
 interface SeItem { question_id: number; title?: string; excerpt?: string }
 

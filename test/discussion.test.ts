@@ -75,6 +75,16 @@ describe("the optional web search", () => {
       },
     });
 
+  it("says it could not read a response it does not recognise, rather than reporting that nothing was found", async () => {
+    const answers = (body: unknown): PageFetcher => ({ close: async () => undefined, fetchPage: async (url) => json(url, url.includes("brave") ? body : url.includes("algolia") ? { hits: [] } : { items: [] }) });
+    const logOf = async (body: unknown) => (await createDiscussionSearch(answers(body), { braveApiKey: "k" })("Initech")).log.find((entry) => entry.source === "web-search");
+
+    expect(await logOf({ message: "quota exceeded" })).toMatchObject({ outcome: "skipped" });
+    expect(await logOf({ type: "search", web: { results: "soon" } })).toMatchObject({ outcome: "skipped" });
+    // A search that found no web results leaves the section out, and that is a real "nothing found".
+    expect(await logOf({ type: "search", query: { original: "x" } })).toMatchObject({ outcome: "empty" });
+  });
+
   it("is not asked without a key, so a clean clone behaves exactly as before", async () => {
     const fetcher = fetcherReturning((url) => json(url, url.includes("algolia") ? { hits: [] } : { items: [] }));
     await createDiscussionSearch(fetcher)("Initech");
