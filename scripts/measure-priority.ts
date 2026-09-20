@@ -16,7 +16,7 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import { loadConfig, loadEnvFile } from "../src/config";
 import { SYSTEM } from "../src/extraction/extract";
-import { normalise } from "../src/extraction/evidence";
+import { containsPhrase, normalise } from "../src/extraction/evidence";
 import { prioritySignals, type PrioritySignals } from "../src/extraction/priority";
 import type { Priority } from "../src/kit/schema";
 import { createLlmClientFromConfig } from "../src/llm";
@@ -54,9 +54,9 @@ function assign(cases: Case[], proposed: Array<{ evidence: string; priority: Pri
   }
   for (const entry of cases.filter((candidate) => !assigned.has(candidate))) {
     const needle = normalise(entry.evidence);
-    // The model may quote more than the case does (the whole line), or a little less (without a trailing clause). A fragment
-    // too short to identify the requirement matches nothing.
-    const overlaps = (evidence: string, wanted: string) => evidence.includes(wanted) || (wanted.includes(evidence) && evidence.length >= wanted.length * 0.6);
+    // The model may quote more than the case does (the whole line) or less (one item of "Python plus SQL"). Either way it must be
+    // there as whole words: a stray fragment like "th" is inside "Strong Python" and identifies nothing.
+    const overlaps = (evidence: string, wanted: string) => containsPhrase(evidence, wanted) || containsPhrase(wanted, evidence);
     const index = normalised.findIndex((evidence, i) => !used.has(i) && overlaps(evidence, needle));
     if (index === -1) continue;
     const contested = cases.some((other) => other !== entry && !assigned.has(other) && overlaps(normalised[index]!, normalise(other.evidence)));
