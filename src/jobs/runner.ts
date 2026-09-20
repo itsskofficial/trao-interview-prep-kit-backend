@@ -139,7 +139,12 @@ export function createJobRunner(db: Database, pipeline: PipelineDeps, options: J
       // The kit is stored only by the process that still holds the job, so a job taken over elsewhere cannot produce two kits.
       if (signal.aborted || !(await db.jobs.findOne(mine(jobId), { projection: { _id: 1 } }))) return void log.warn("job finished after losing its lease; result discarded");
       const stored = await kits.create(job.userId, kit, job.fingerprint, trace);
-      await finish(jobId, { status: "succeeded", kitId: new ObjectId(stored.id), trace });
+      // The check above and this write are two steps, and the job can change hands between them (its lease runs out, or this
+      // process is told to stop). Whoever has it now will make its kit, so the one just stored must not be left beside theirs.
+      if (!(await finish(jobId, { status: "succeeded", kitId: new ObjectId(stored.id), trace }))) {
+        await kits.remove(job.userId, stored.id).catch(() => undefined);
+        return void log.warn({ kitId: stored.id }, "job changed hands while its kit was being stored; that kit was removed");
+      }
       log.info({ kitId: stored.id, ms: trace?.durationMs, ...trace?.totals }, "job succeeded");
     } catch (error) {
       await progress;
@@ -155,8 +160,10 @@ export function createJobRunner(db: Database, pipeline: PipelineDeps, options: J
     }
   }
 
-  async function finish(jobId: ObjectId, fields: Pick<JobDoc, "status"> & Partial<Pick<JobDoc, "kitId" | "error" | "trace">>): Promise<void> {
-    await db.jobs.updateOne(mine(jobId), { $set: { ...fields, updatedAt: now() }, $unset: { active: "", lease: "" } });
+  /** False when the job is no longer this process's to finish. */
+  async function finish(jobId: ObjectId, fields: Pick<JobDoc, "status"> & Partial<Pick<JobDoc, "kitId" | "error" | "trace">>): Promise<boolean> {
+    const result = await db.jobs.updateOne(mine(jobId), { $set: { ...fields, updatedAt: now() }, $unset: { active: "", lease: "" } });
+    return result.matchedCount === 1;
   }
 
   /** Jobs whose process died on every attempt. They are closed, and the user can retry them by hand. */

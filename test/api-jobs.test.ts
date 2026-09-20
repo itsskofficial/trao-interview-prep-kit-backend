@@ -244,6 +244,32 @@ describe("a server restart", () => {
     expect(model.requests.slice(before).filter((request) => request.route === "extract")).toHaveLength(1);
   });
 
+  it("removes the kit it just stored if the job changed hands in that instant", async () => {
+    await api.signedIn();
+    const jobId = await queued("changed-hands");
+
+    // The narrowest window there is: the job is taken over after this run's last ownership check, while its kit is being written.
+    const insertOne = api.db.kits.insertOne.bind(api.db.kits);
+    api.db.kits.insertOne = (async (...args: Parameters<typeof insertOne>) => {
+      const inserted = await insertOne(...args);
+      await api.db.jobs.updateOne({ _id: jobId }, { $set: { lease: { owner: "someone-else", expiresAt: new Date(Date.now() + 60_000) } } });
+      return inserted;
+    }) as typeof insertOne;
+
+    try {
+      const runner = anotherProcess();
+      runner.enqueue(jobId);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    } finally {
+      api.db.kits.insertOne = insertOne;
+    }
+
+    // The other process will make the job's kit. This one's must not be left beside it.
+    expect(await api.db.kits.countDocuments()).toBe(0);
+    expect(await api.db.jobs.findOne({ _id: jobId })).toMatchObject({ status: "running", lease: { owner: "someone-else" } });
+    await api.db.jobs.deleteMany({});
+  });
+
   it("stops working and stores nothing when it finds its lease has been taken", async () => {
     await api.signedIn();
     const jobId = await queued("taken-over");
