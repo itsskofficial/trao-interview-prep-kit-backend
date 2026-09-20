@@ -163,6 +163,35 @@ describe("regenerating a section", () => {
     expect(validateKit(kit)).toMatchObject({ ok: true });
   });
 
+  it("does not add a regenerated question that repeats one the user is keeping", async () => {
+    const { ada, base } = await adaWithKit();
+    await ada.patch(`${base}/questions/q1`).send({ prompt: "How would you debug a memory leak in a Node.js service?" });
+    technicalAnswer = {
+      questions: [
+        { requirement_ids: ["r1"], prompt: "How would you debug a memory leak in a Node.js service in production?", answer_outline: "Again", difficulty: 2 },
+        { requirement_ids: ["r3"], prompt: "How does Kubernetes decide where to schedule a pod?", answer_outline: "New", difficulty: 2 },
+      ],
+    };
+    await ada.post(`${base}/regenerate`).send({ section: "questions", category: "technical" }).expect(202);
+    await api.regenerator.idle();
+
+    const { kit } = (await ada.get(base)).body;
+    const prompts = kit.questions.filter((x: Question) => x.category === "technical").map((x: Question) => x.prompt);
+    expect(prompts).toEqual(["How would you debug a memory leak in a Node.js service?", "How does Kubernetes decide where to schedule a pod?"]);
+  });
+
+  it("replaces nothing, and says why, when the model only repeats what is being kept", async () => {
+    const { ada, base } = await adaWithKit();
+    await ada.patch(`${base}/questions/q1`).send({ prompt: "How would you debug a memory leak in a Node.js service?" });
+    technicalAnswer = { questions: [{ requirement_ids: ["r1"], prompt: "How would you debug a memory leak in a Node.js service today?", answer_outline: "Again", difficulty: 2 }] };
+    await ada.post(`${base}/regenerate`).send({ section: "questions", category: "technical" }).expect(202);
+    await api.regenerator.idle();
+
+    const { kit, regeneration } = (await ada.get(base)).body;
+    expect(regeneration).toMatchObject({ status: "failed", error: expect.stringContaining("only repeated questions you are keeping") });
+    expect(questionIds(kit, "technical")).toEqual(["q1", "q2", "q4"]);
+  });
+
   it("keeps an edit that arrives while the model is still thinking, even in the same category", async () => {
     const { ada, base } = await adaWithKit();
     hold = true;

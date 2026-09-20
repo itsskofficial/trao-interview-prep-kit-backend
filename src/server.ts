@@ -4,6 +4,7 @@ import { allowsPrivateUrls, loadConfig, loadEnvFile } from "./config";
 import { createJobRunner } from "./jobs/runner";
 import { createLlmClientFromConfig } from "./llm";
 import { createLogger } from "./logging/logger";
+import { createEmbedderFromConfig } from "./similarity";
 import { kitRepository } from "./persistence/kits";
 import { connectDatabase } from "./persistence/mongo";
 import { createPageFetcher } from "./retrieval/fetcher";
@@ -21,9 +22,11 @@ const llm = createLlmClientFromConfig(config, (event) => {
   if (event.type === "repair") logger.info({ step: event.step, provider: event.provider }, "model answer repaired");
 });
 const fetcher = createPageFetcher({ allowPrivate: allowsPrivateUrls(config) });
-const runner = createJobRunner(db, { llm, fetcher }, undefined, logger);
+// Comparing meaning is an aid: when the embedding call fails the pipeline carries on with a lexical comparison, and says so here.
+const embedder = createEmbedderFromConfig(config, (reason) => logger.warn({ reason }, "embeddings unavailable, compared lexically"));
+const runner = createJobRunner(db, { llm, fetcher, embedder }, undefined, logger);
 const kits = kitRepository(db);
-const regenerator = createRegenerator(kits, { llm, fetcher });
+const regenerator = createRegenerator(kits, { llm, fetcher, embedder });
 
 // Jobs only live in this process. Whatever a previous process left unfinished is marked so, and can be retried.
 const interrupted = (await runner.recoverInterrupted()) + (await kits.failInterruptedRegenerations());
