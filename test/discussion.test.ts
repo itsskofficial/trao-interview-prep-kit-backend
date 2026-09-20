@@ -45,8 +45,17 @@ describe("public discussion search", () => {
     );
     const result = await createDiscussionSearch(fetcher)("Initech");
     expect(result.snippets).toEqual([]);
-    expect(result.log[0]).toEqual({ source: "hacker-news", outcome: "skipped", reason: "timeout: The site did not respond in time." });
+    expect(result.log[0]).toEqual({ source: "hacker-news", outcome: "skipped", reason: "The service could not be reached." });
     expect(result.log[1]).toMatchObject({ source: "stack-exchange-workplace", outcome: "empty" });
+  });
+
+  it("says in plain words when a source is limiting requests or refusing a key", async () => {
+    const failing = (status: number) => fetcherReturning((url) => (url.includes("stackexchange") ? { ok: false, url, reason: "http_error", detail: `HTTP ${status}`, status } : json(url, { hits: [] })));
+    const reasonFor = async (status: number) => (await createDiscussionSearch(failing(status))("Initech")).log.find((entry) => entry.source === "stack-exchange-workplace")!.reason;
+
+    expect(await reasonFor(400)).toContain("probably limiting requests");
+    expect(await reasonFor(429)).toContain("probably limiting requests");
+    expect(await reasonFor(403)).toContain("the key was not accepted");
   });
 
   it("survives a response that is not the JSON it expected", async () => {
