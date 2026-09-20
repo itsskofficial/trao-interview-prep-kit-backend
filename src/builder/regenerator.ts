@@ -80,7 +80,7 @@ export function createRegenerator(kits: KitRepository, pipeline: PipelineDeps): 
     const asked = briefText(kit);
     const crawl = await crawlCompanySite(kit.source.company_url, pipeline.fetcher, { pickLinks: createLinkPicker(pipeline.llm), company: kit.source.company });
     const company = kit.source.company || crawl.siteName;
-    const discussion = await (pipeline.searchDiscussion ?? createDiscussionSearch(pipeline.fetcher))(company);
+    const discussion = await (pipeline.searchDiscussion ?? createDiscussionSearch(pipeline.fetcher, pipeline.discussion))(company);
     const researched = await writeCompanyBrief(
       { company, home: crawl.home, about: crawl.about, hiring: crawl.hiring, discussion: discussion.snippets, siteFailure: crawl.failure },
       pipeline.llm,

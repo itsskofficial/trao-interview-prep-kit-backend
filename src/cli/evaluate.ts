@@ -65,6 +65,7 @@ async function main(): Promise<number> {
   const output = await runBatch(cases, {
     llm,
     fetcher,
+    discussion: { braveApiKey: config.BRAVE_SEARCH_API_KEY || undefined },
     embedder: createEmbedderFromConfig(config, (reason) => console.error(`  Embeddings unavailable (${reason}); compared lexically.`)),
     concurrency: config.BATCH_CONCURRENCY,
     caseTimeoutMs: caseTimeoutMs(config),

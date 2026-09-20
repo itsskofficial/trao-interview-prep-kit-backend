@@ -24,9 +24,10 @@ const llm = createLlmClientFromConfig(config, (event) => {
 const fetcher = createPageFetcher({ allowPrivate: allowsPrivateUrls(config) });
 // Comparing meaning is an aid: when the embedding call fails the pipeline carries on with a lexical comparison, and says so here.
 const embedder = createEmbedderFromConfig(config, (reason) => logger.warn({ reason }, "embeddings unavailable, compared lexically"));
-const runner = createJobRunner(db, { llm, fetcher, embedder }, { logger });
+const discussion = { braveApiKey: config.BRAVE_SEARCH_API_KEY || undefined };
+const runner = createJobRunner(db, { llm, fetcher, embedder, discussion }, { logger });
 const kits = kitRepository(db);
-const regenerator = createRegenerator(kits, { llm, fetcher, embedder });
+const regenerator = createRegenerator(kits, { llm, fetcher, embedder, discussion });
 
 // The jobs collection is the queue: whatever a previous process left queued or half-done is picked up from there.
 // Regenerations are short and belong to one request, so an unfinished one is marked failed and can be asked for again.

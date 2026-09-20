@@ -62,3 +62,43 @@ describe("public discussion search", () => {
     expect(result.log).toEqual([expect.objectContaining({ source: "public-discussion", outcome: "skipped" })]);
   });
 });
+
+describe("the optional web search", () => {
+  const brave = (url: string) =>
+    json(url, {
+      web: {
+        results: [
+          { title: "My Initech interview", url: "https://blog.example/initech-interview", description: "The <strong>Initech</strong> interview was a recruiter call and then a take-home." },
+          { title: "Initech pricing", url: "https://initech.example/pricing", description: "Plans start at $9." },
+          { title: "Initech interview", url: "javascript:alert(1)", description: "Initech interview, from an address that is not a web page." },
+        ],
+      },
+    });
+
+  it("is not asked without a key, so a clean clone behaves exactly as before", async () => {
+    const fetcher = fetcherReturning((url) => json(url, url.includes("algolia") ? { hits: [] } : { items: [] }));
+    await createDiscussionSearch(fetcher)("Initech");
+    expect(fetcher.urls.some((url) => url.includes("brave"))).toBe(false);
+  });
+
+  it("adds relevant results when a key is configured, through the same filters as every other source", async () => {
+    const seen: Array<{ url: string; headers?: Record<string, string> }> = [];
+    const fetcher: PageFetcher = {
+      close: async () => undefined,
+      fetchPage: async (url, _accept, options) => {
+        seen.push({ url, headers: options?.headers });
+        return url.includes("brave") ? brave(url) : json(url, url.includes("algolia") ? { hits: [] } : { items: [] });
+      },
+    };
+    const result = await createDiscussionSearch(fetcher, { braveApiKey: "a-secret-key" })("Initech");
+
+    expect(result.snippets).toEqual([{ source: "web-search", url: "https://blog.example/initech-interview", text: "My Initech interview - The Initech interview was a recruiter call and then a take-home." }]);
+    expect(result.log).toContainEqual({ source: "web-search", outcome: "used", reason: "1 relevant result(s)" });
+
+    // The key goes in a header to that one service, never in an address, and to nobody else.
+    const asked = seen.find((request) => request.url.includes("brave"))!;
+    expect(asked.headers).toEqual({ "X-Subscription-Token": "a-secret-key" });
+    expect(seen.map((request) => request.url).join(" ")).not.toContain("a-secret-key");
+    expect(seen.filter((request) => !request.url.includes("brave")).every((request) => request.headers === undefined)).toBe(true);
+  });
+});

@@ -38,8 +38,16 @@ export interface FetcherOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
+export interface FetchOptions {
+  /**
+   * Extra request headers, for an API that wants a key. Sent only to the origin of the address asked for: a redirect
+   * to anywhere else goes without them, so a key cannot be walked off to another host.
+   */
+  headers?: Record<string, string>;
+}
+
 export interface PageFetcher {
-  fetchPage(url: string, accept?: Accept): Promise<FetchResult>;
+  fetchPage(url: string, accept?: Accept, options?: FetchOptions): Promise<FetchResult>;
   close(): Promise<void>;
 }
 
@@ -102,14 +110,14 @@ export function createPageFetcher(options: FetcherOptions): PageFetcher {
     return run;
   }
 
-  async function requestOnce(url: URL, accept: Accept): Promise<Exchange> {
+  async function requestOnce(url: URL, accept: Accept, extraHeaders: Record<string, string> = {}): Promise<Exchange> {
     let response;
     try {
       response = await undiciFetch(url, {
         dispatcher,
         redirect: "manual",
         signal: AbortSignal.timeout(timeoutMs),
-        headers: { "User-Agent": USER_AGENT, Accept: ACCEPT_HEADER[accept] },
+        headers: { ...extraHeaders, "User-Agent": USER_AGENT, Accept: ACCEPT_HEADER[accept] },
       });
     } catch (error) {
       return classifyFailure(url.href, error);
@@ -165,9 +173,9 @@ export function createPageFetcher(options: FetcherOptions): PageFetcher {
   }
 
   /** One URL, with backoff on the failures worth retrying: 429, 5xx, timeouts and network errors. */
-  async function requestWithRetry(url: URL, accept: Accept): Promise<Exchange> {
+  async function requestWithRetry(url: URL, accept: Accept, extraHeaders?: Record<string, string>): Promise<Exchange> {
     for (let attempt = 0; ; attempt++) {
-      const result = await paced(url, () => requestOnce(url, accept));
+      const result = await paced(url, () => requestOnce(url, accept, extraHeaders));
       if ("redirectTo" in result || result.ok || attempt >= retries || !isRetryable(result)) return result;
 
       const retryAfterSeconds = Number(/retry-after (\d+)/.exec(result.detail)?.[1]);
@@ -190,8 +198,9 @@ export function createPageFetcher(options: FetcherOptions): PageFetcher {
     return cached;
   }
 
-  async function fetchPage(input: string, accept: Accept = "html"): Promise<FetchResult> {
+  async function fetchPage(input: string, accept: Accept = "html", options: FetchOptions = {}): Promise<FetchResult> {
     let current = input;
+    let askedOrigin: string | undefined;
     for (let hop = 0; hop <= maxRedirects; hop++) {
       const checked = checkUrl(current, allowPrivate);
       if (!checked.ok) return { ok: false, url: current, reason: checked.reason, detail: checked.detail };
@@ -201,7 +210,8 @@ export function createPageFetcher(options: FetcherOptions): PageFetcher {
         return { ok: false, url: checked.url.href, reason: "robots_disallowed", detail: "Disallowed by robots.txt." };
       }
 
-      const result = await requestWithRetry(checked.url, accept);
+      askedOrigin ??= checked.url.origin;
+      const result = await requestWithRetry(checked.url, accept, checked.url.origin === askedOrigin ? options.headers : undefined);
       if (!("redirectTo" in result)) return result;
 
       // Every hop goes back through validation and robots.txt, so a redirect cannot smuggle in a private address.
