@@ -1,0 +1,379 @@
+{
+  "about": "Awkward real-world ways postings say 'required' or 'bonus'. Each case is a posting fragment, the evidence quoted for one requirement, and what a careful reader would call it. test/priority-measured.test.ts feeds the rule the WRONG label as the model's opinion, so a pass means the wording decided, not the model. 'defer' means the posting gives no signal and the model's label should stand. The \"heldOut\" cases were written after the rule was tuned on \"cases\" and are never tuned against: their score is the honest one.",
+  "cases": [
+    {
+      "jd": "Requirements\n- 5+ years with Node.js",
+      "evidence": "5+ years with Node.js",
+      "expected": "must",
+      "note": "plain heading"
+    },
+    {
+      "jd": "Nice to have\n- Kubernetes",
+      "evidence": "Kubernetes",
+      "expected": "nice",
+      "note": "plain heading"
+    },
+    {
+      "jd": "Required: React. Bonus: GraphQL.",
+      "evidence": "React",
+      "expected": "must",
+      "note": "one-line stub"
+    },
+    {
+      "jd": "Required: React. Bonus: GraphQL.",
+      "evidence": "GraphQL",
+      "expected": "nice",
+      "note": "one-line stub"
+    },
+    {
+      "jd": "Requirements\n- Bachelor's degree required, Master's preferred",
+      "evidence": "Bachelor's degree required, Master's preferred",
+      "expected": "must",
+      "note": "both signals, must first"
+    },
+    {
+      "jd": "Requirements\n- A degree is not required",
+      "evidence": "A degree is not required",
+      "expected": "nice",
+      "note": "negated must"
+    },
+    {
+      "jd": "What you'll bring\n- Strong SQL",
+      "evidence": "Strong SQL",
+      "expected": "must",
+      "note": "friendly heading"
+    },
+    {
+      "jd": "Bonus points\n- Rust",
+      "evidence": "Rust",
+      "expected": "nice",
+      "note": "bonus heading"
+    },
+    {
+      "jd": "Requirements\n- Experience with AWS is a big plus",
+      "evidence": "Experience with AWS is a big plus",
+      "expected": "nice",
+      "note": "nice wording under a must heading"
+    },
+    {
+      "jd": "Requirements\n- Python plus SQL",
+      "evidence": "Python plus SQL",
+      "expected": "must",
+      "note": "'plus' as 'and'"
+    },
+    {
+      "jd": "Nice to have\n- You must be comfortable on call",
+      "evidence": "You must be comfortable on call",
+      "expected": "must",
+      "note": "must wording under a nice heading"
+    },
+    {
+      "jd": "About you\n- You have shipped production Go services",
+      "evidence": "You have shipped production Go services",
+      "expected": "must",
+      "note": "about you"
+    },
+    {
+      "jd": "We'd love it if you also had\n- Terraform",
+      "evidence": "Terraform",
+      "expected": "nice",
+      "note": "conversational bonus heading"
+    },
+    {
+      "jd": "It would be great if you have\n- Experience with Kafka",
+      "evidence": "Experience with Kafka",
+      "expected": "nice",
+      "note": "would be great"
+    },
+    {
+      "jd": "Even better if you\n- Have worked in fintech",
+      "evidence": "Have worked in fintech",
+      "expected": "nice",
+      "note": "even better if"
+    },
+    {
+      "jd": "Extra credit\n- Open source contributions",
+      "evidence": "Open source contributions",
+      "expected": "nice",
+      "note": "extra credit"
+    },
+    {
+      "jd": "Must-haves\n- TypeScript",
+      "evidence": "TypeScript",
+      "expected": "must",
+      "note": "hyphenated heading"
+    },
+    {
+      "jd": "Nice-to-haves\n- Elixir",
+      "evidence": "Elixir",
+      "expected": "nice",
+      "note": "hyphenated plural heading"
+    },
+    {
+      "jd": "Minimum qualifications\n- 3 years of backend experience",
+      "evidence": "3 years of backend experience",
+      "expected": "must",
+      "note": "minimum qualifications"
+    },
+    {
+      "jd": "Preferred qualifications\n- Experience with gRPC",
+      "evidence": "Experience with gRPC",
+      "expected": "nice",
+      "note": "preferred wins over qualifications"
+    },
+    {
+      "jd": "Basic qualifications\n- Java",
+      "evidence": "Java",
+      "expected": "must",
+      "note": "basic qualifications"
+    },
+    {
+      "jd": "Desired skills\n- Scala",
+      "evidence": "Scala",
+      "expected": "nice",
+      "note": "desired"
+    },
+    {
+      "jd": "Requirements\n- Familiarity with Docker (not essential)",
+      "evidence": "Familiarity with Docker (not essential)",
+      "expected": "nice",
+      "note": "parenthetical"
+    },
+    {
+      "jd": "Requirements\n- Ideally you have led a team",
+      "evidence": "Ideally you have led a team",
+      "expected": "nice",
+      "note": "ideally"
+    },
+    {
+      "jd": "Requirements\n- Knowledge of GraphQL would be advantageous",
+      "evidence": "Knowledge of GraphQL would be advantageous",
+      "expected": "nice",
+      "note": "advantageous"
+    },
+    {
+      "jd": "What we're looking for\n- Solid understanding of HTTP",
+      "evidence": "Solid understanding of HTTP",
+      "expected": "must",
+      "note": "looking for"
+    },
+    {
+      "jd": "Who you are\n- A clear communicator",
+      "evidence": "A clear communicator",
+      "expected": "must",
+      "note": "who you are"
+    },
+    {
+      "jd": "You will need\n- The right to work in the UK",
+      "evidence": "The right to work in the UK",
+      "expected": "must",
+      "note": "you will need"
+    },
+    {
+      "jd": "Essential skills\n- React\n\nDesirable skills\n- Vue",
+      "evidence": "Vue",
+      "expected": "nice",
+      "note": "second section"
+    },
+    {
+      "jd": "Essential skills\n- React\n\nDesirable skills\n- Vue",
+      "evidence": "React",
+      "expected": "must",
+      "note": "first section"
+    },
+    {
+      "jd": "Requirements\n- Strong Python; experience with Airflow a bonus",
+      "evidence": "experience with Airflow a bonus",
+      "expected": "nice",
+      "note": "clause after semicolon"
+    },
+    {
+      "jd": "Requirements\n- Strong Python; experience with Airflow a bonus",
+      "evidence": "Strong Python",
+      "expected": "must",
+      "note": "clause before semicolon"
+    },
+    {
+      "jd": "**Requirements**\n- **Node.js**",
+      "evidence": "Node.js",
+      "expected": "must",
+      "note": "markdown heading"
+    },
+    {
+      "jd": "## Nice to have\n* Redis",
+      "evidence": "Redis",
+      "expected": "nice",
+      "note": "markdown heading with hashes"
+    },
+    {
+      "jd": "What would set you apart\n- A background in logistics",
+      "evidence": "A background in logistics",
+      "expected": "nice",
+      "note": "set you apart"
+    },
+    {
+      "jd": "Things that will make you stand out\n- Conference talks",
+      "evidence": "Conference talks",
+      "expected": "nice",
+      "note": "stand out"
+    },
+    {
+      "jd": "Non-negotiables\n- Fluent English",
+      "evidence": "Fluent English",
+      "expected": "must",
+      "note": "non-negotiable"
+    },
+    {
+      "jd": "Requirements\n- Experience with Kubernetes is helpful but we can teach you",
+      "evidence": "Experience with Kubernetes is helpful but we can teach you",
+      "expected": "nice",
+      "note": "helpful"
+    },
+    {
+      "jd": "Requirements\n- Any exposure to machine learning is welcome",
+      "evidence": "Any exposure to machine learning is welcome",
+      "expected": "nice",
+      "note": "welcome"
+    },
+    {
+      "jd": "You don't need to tick every box, but these matter most\n- Strong JavaScript",
+      "evidence": "Strong JavaScript",
+      "expected": "must",
+      "note": "matter most"
+    },
+    {
+      "jd": "The team\nWe are twelve engineers across three time zones.\n- PostgreSQL",
+      "evidence": "PostgreSQL",
+      "expected": "defer",
+      "note": "no signal anywhere"
+    },
+    {
+      "jd": "Tech stack\n- Go\n- Postgres",
+      "evidence": "Go",
+      "expected": "defer",
+      "note": "a stack list is not a requirement list"
+    }
+  ],
+  "heldOut": [
+    {
+      "jd": "Key requirements\n- Commercial experience with C#",
+      "evidence": "Commercial experience with C#",
+      "expected": "must",
+      "note": "key requirements"
+    },
+    {
+      "jd": "Your profile\n- Several years building REST APIs",
+      "evidence": "Several years building REST APIs",
+      "expected": "must",
+      "note": "your profile"
+    },
+    {
+      "jd": "Skills and experience\n- Strong knowledge of CSS",
+      "evidence": "Strong knowledge of CSS",
+      "expected": "must",
+      "note": "skills and experience"
+    },
+    {
+      "jd": "What you need to succeed\n- Experience with event-driven systems",
+      "evidence": "Experience with event-driven systems",
+      "expected": "must",
+      "note": "need to succeed"
+    },
+    {
+      "jd": "Beneficial\n- Azure certification",
+      "evidence": "Azure certification",
+      "expected": "nice",
+      "note": "beneficial"
+    },
+    {
+      "jd": "Requirements\n- Exposure to Snowflake would be beneficial",
+      "evidence": "Exposure to Snowflake would be beneficial",
+      "expected": "nice",
+      "note": "would be beneficial"
+    },
+    {
+      "jd": "Requirements\n- Prior startup experience is appreciated",
+      "evidence": "Prior startup experience is appreciated",
+      "expected": "nice",
+      "note": "appreciated"
+    },
+    {
+      "jd": "Icing on the cake\n- Public speaking",
+      "evidence": "Public speaking",
+      "expected": "nice",
+      "note": "icing on the cake"
+    },
+    {
+      "jd": "Requirements\n- Degree in computer science or equivalent experience",
+      "evidence": "Degree in computer science or equivalent experience",
+      "expected": "must",
+      "note": "or equivalent"
+    },
+    {
+      "jd": "Additional skills\n- Figma",
+      "evidence": "Figma",
+      "expected": "nice",
+      "note": "additional skills"
+    },
+    {
+      "jd": "Hard requirements\n- EU work permit",
+      "evidence": "EU work permit",
+      "expected": "must",
+      "note": "hard requirements"
+    },
+    {
+      "jd": "Requirements\n- Some familiarity with Ruby, though not a dealbreaker",
+      "evidence": "Some familiarity with Ruby, though not a dealbreaker",
+      "expected": "nice",
+      "note": "not a dealbreaker"
+    },
+    {
+      "jd": "You should have\n- Two years of on-call experience",
+      "evidence": "Two years of on-call experience",
+      "expected": "must",
+      "note": "you should have"
+    },
+    {
+      "jd": "Pluses\n- Haskell",
+      "evidence": "Haskell",
+      "expected": "nice",
+      "note": "pluses"
+    },
+    {
+      "jd": "Requirements\n- Experience mentoring is a strong plus",
+      "evidence": "Experience mentoring is a strong plus",
+      "expected": "nice",
+      "note": "a strong plus"
+    },
+    {
+      "jd": "What makes you a great fit\n- You care about accessibility",
+      "evidence": "You care about accessibility",
+      "expected": "must",
+      "note": "great fit"
+    },
+    {
+      "jd": "Requirements\n- It is essential that you can work UK hours",
+      "evidence": "It is essential that you can work UK hours",
+      "expected": "must",
+      "note": "essential in a sentence"
+    },
+    {
+      "jd": "Optional but valued\n- A security background",
+      "evidence": "A security background",
+      "expected": "nice",
+      "note": "optional but valued"
+    },
+    {
+      "jd": "Responsibilities\n- Own the billing service",
+      "evidence": "Own the billing service",
+      "expected": "defer",
+      "note": "a responsibility is not a requirement signal"
+    },
+    {
+      "jd": "Requirements\n- Knowledge of Kafka is preferred but not required",
+      "evidence": "Knowledge of Kafka is preferred but not required",
+      "expected": "nice",
+      "note": "preferred but not required"
+    }
+  ]
+}

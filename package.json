@@ -18,7 +18,8 @@
     "dev:offline": "tsx scripts/dev-offline.ts",
     "calibrate": "tsx scripts/calibrate-similarity.ts",
     "judge": "tsx scripts/judge.ts",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "measure:priority": "tsx scripts/measure-priority.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { containsPhrase, isQuotedFrom, normalise } from "../src/extraction/evidence";
-import { decidePriority } from "../src/extraction/priority";
+import { decidePriority, prioritySignals } from "../src/extraction/priority";
 
 /** Cases a code review found by trying postings the way people actually write them. */
 
@@ -71,12 +71,14 @@ describe("priority when the wording is mixed or unusual", () => {
 
   it("does not read a conjunction as a bonus", () => {
     const line = "Python plus SQL, every day";
-    expect(decidePriority(under("Requirements", line), line, "nice")).toBe("must");
+    expect(prioritySignals(under("Requirements", line), line).line).toBeUndefined();
+    expect(decidePriority(under("Requirements", line), line, "must")).toBe("must");
   });
 
   it("does not find 'desired' inside another word", () => {
     const line = "Handles undesired side effects calmly";
-    expect(decidePriority(under("Requirements", line), line, "nice")).toBe("must");
+    expect(prioritySignals(under("Requirements", line), line).line).toBeUndefined();
+    expect(decidePriority(under("Requirements", line), line, "must")).toBe("must");
   });
 
   it.each([
@@ -84,8 +86,27 @@ describe("priority when the wording is mixed or unusual", () => {
     ["Required qualifications", "must"],
     ["Minimum qualifications", "must"],
     ["Bonus points", "nice"],
-    ["What we're looking for", "must"],
-  ] as const)("reads the heading %j as %s", (heading, expected) => {
+    ["Must-haves", "must"],
+    ["Nice-to-haves", "nice"],
+  ] as const)("reads the heading %j as %s, whatever the model says", (heading, expected) => {
     expect(decidePriority(under(heading, "Elixir"), "Elixir", expected === "must" ? "nice" : "must")).toBe(expected);
+  });
+
+  it("does not read 'you don't need to' as a requirement", () => {
+    const heading = "You don't need to tick every box";
+    expect(prioritySignals(under(heading, "Elixir"), "Elixir").heading).toBeUndefined();
+    const line = "You do not need to have used Rust before";
+    expect(prioritySignals(under("Requirements", line), line).line).toBeUndefined();
+    const contracted = "You needn't have a degree";
+    expect(prioritySignals(under("Requirements", contracted), contracted).line).toBeUndefined();
+    // Still a requirement when it is one.
+    expect(prioritySignals(under("Requirements", "You need to be able to work UK hours"), "You need to be able to work UK hours").line).toBe("must");
+  });
+
+  // Measured: postings put "is appreciated" and "not a dealbreaker" under these, and the model reads the line; the heading does not.
+  it.each(["Requirements", "What we're looking for", "About you", "Qualifications"])("treats the heading %j as a container, and lets the model's reading of the line stand", (heading) => {
+    const line = "Prior startup experience is appreciated";
+    expect(decidePriority(under(heading, line), line, "nice")).toBe("nice");
+    expect(decidePriority(under(heading, "Elixir"), "Elixir", "must")).toBe("must");
   });
 });

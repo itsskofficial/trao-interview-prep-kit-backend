@@ -137,7 +137,7 @@ describe("decidePriority", () => {
   it("lets a bonus phrase on the line win over a Requirements heading", () => {
     const description = "Requirements\n- Python\n- Rust is a plus";
     expect(decidePriority(description, "Rust is a plus", "must")).toBe("nice");
-    expect(decidePriority(description, "Python", "nice")).toBe("must");
+    expect(decidePriority(description, "Python", "must")).toBe("must");
   });
 
   it("lets 'required' on the line win over a Nice to have heading", () => {
