@@ -12,12 +12,21 @@ export type LogLevel = (typeof LOG_LEVELS)[number];
  * ever be reached. They are censored anyway: the day someone logs an object without thinking is the
  * day a password ends up in a log viewer.
  */
-const SECRET = ["password", "passwordHash", "cookie", "authorization", "token", "apiKey", "secret", "set-cookie"];
-const REDACT = SECRET.flatMap((key) => {
-  const name = /^[a-z]+$/i.test(key) ? key : `["${key}"]`;
-  const at = (prefix: string) => (name.startsWith("[") ? `${prefix}${name}` : `${prefix}.${name}`);
-  return [name, at("*"), at("*.*"), at("*.*.*")];
-});
+const SECRET = /^(password|passwordhash|cookie|set-cookie|authorization|token|accesstoken|refreshtoken|apikey|api_key|secret|jwt|session)$/i;
+const MAX_DEPTH = 8;
+
+/** Censors secret-named keys however deep they sit. Path lists only reach as far as someone thought to write them. */
+export function censor(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
+  if (value === null || typeof value !== "object") return value;
+  // Errors keep their own serialiser; dates and buffers have nothing to censor.
+  if (value instanceof Error || value instanceof Date || Buffer.isBuffer(value)) return value;
+  if (seen.has(value) || depth >= MAX_DEPTH) return "[omitted]";
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((entry) => censor(entry, depth + 1, seen));
+  // An ObjectId and the like: something with its own idea of how to be written.
+  if (typeof (value as { toJSON?: unknown }).toJSON === "function") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, SECRET.test(key) ? "[redacted]" : censor(entry, depth + 1, seen)]));
+}
 
 /** JSON lines on stdout: what a host's log viewer can filter by job, request or user. */
 export function createLogger(level: LogLevel, destination?: DestinationStream): Logger {
@@ -26,8 +35,7 @@ export function createLogger(level: LogLevel, destination?: DestinationStream): 
       level,
       base: undefined, // pid and hostname say nothing on a single container
       timestamp: pino.stdTimeFunctions.isoTime,
-      formatters: { level: (label) => ({ level: label }) },
-      redact: { paths: REDACT, censor: "[redacted]" },
+      formatters: { level: (label) => ({ level: label }), log: (fields) => censor(fields) as Record<string, unknown> },
     },
     destination,
   );

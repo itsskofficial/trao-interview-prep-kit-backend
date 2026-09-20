@@ -14,6 +14,8 @@ export interface BatchDeps extends PipelineDeps {
   onPartial?: (finished: CaseResult[]) => void | Promise<void>;
   /** Given each case's run trace. A case that timed out reports late, when its abandoned run notices; identical cases share one run and one trace. */
   onCaseTrace?: (id: string, trace: RunTrace) => void;
+  /** How long to wait, once every case is decided, for abandoned runs to stop and hand over their traces. */
+  abandonGraceMs?: number;
 }
 
 /** A case result before it is given its id, so identical cases can share one. */
@@ -25,7 +27,8 @@ type Outcome = CaseResult extends infer Result ? (Result extends CaseResult ? Om
  * come back in input order, one per case, whatever order they finished in.
  */
 export async function runBatch(cases: unknown[], deps: BatchDeps): Promise<BatchOutput> {
-  const { concurrency = 2, caseTimeoutMs = 170_000, log = () => undefined, now = () => new Date() } = deps;
+  const { concurrency = 2, caseTimeoutMs = 170_000, log = () => undefined, now = () => new Date(), abandonGraceMs = 3_000 } = deps;
+  const abandoned: Array<Promise<unknown>> = [];
   const results = new Array<CaseResult>(cases.length);
   const inFlight = new Map<string, Promise<Outcome>>();
   const traced = new Map<string, { ids: string[]; trace?: RunTrace }>();
@@ -55,7 +58,7 @@ export async function runBatch(cases: unknown[], deps: BatchDeps): Promise<Batch
           sharers.trace = trace;
           for (const sharer of sharers.ids) deps.onCaseTrace?.(sharer, trace);
         };
-        const running = inFlight.get(key) ?? runCase(parsed.data, { ...deps, onTrace }, caseTimeoutMs);
+        const running = inFlight.get(key) ?? runCase(parsed.data, { ...deps, onTrace }, caseTimeoutMs, (work) => abandoned.push(work));
         inFlight.set(key, running);
         outcome = await running;
       }
@@ -68,10 +71,18 @@ export async function runBatch(cases: unknown[], deps: BatchDeps): Promise<Batch
   }
 
   await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(cases.length, 1)) }, worker));
+
+  // A run given up on stops at its next model call and then reports its trace. That is usually moments away,
+  // but it is not waited for indefinitely: the results are decided, and a slow page fetch must not hold them.
+  if (abandoned.length > 0) {
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([Promise.allSettled(abandoned), new Promise((resolve) => (timer = setTimeout(resolve, abandonGraceMs)))]);
+    clearTimeout(timer);
+  }
   return { version: "1.0", generated_at: now().toISOString(), kits: results };
 }
 
-async function runCase(input: CaseInput, deps: BatchDeps, timeoutMs: number): Promise<Outcome> {
+async function runCase(input: CaseInput, deps: BatchDeps, timeoutMs: number, onAbandoned: (work: Promise<unknown>) => void = () => undefined): Promise<Outcome> {
   let timer: NodeJS.Timeout | undefined;
   // Giving up on a case also stops it: its remaining model calls would otherwise sit in the shared
   // rate limiter ahead of the cases still running, and make them time out too.
@@ -79,14 +90,17 @@ async function runCase(input: CaseInput, deps: BatchDeps, timeoutMs: number): Pr
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       abandoned.abort();
+      onAbandoned(work.catch(() => undefined));
       reject(new PipelineError("TIMEOUT", `No kit after ${Math.round(timeoutMs / 1000)} seconds.`));
     }, timeoutMs);
   });
 
+  let work: Promise<unknown> = Promise.resolve();
   try {
-    const work = buildKit({ jd: input.jd, companyUrl: input.company_url, days: input.days }, { ...deps, signal: abandoned.signal });
-    work.catch(() => undefined); // once abandoned, its eventual failure is nobody's concern
-    const kit = await Promise.race([work, timeout]);
+    const building = buildKit({ jd: input.jd, companyUrl: input.company_url, days: input.days }, { ...deps, signal: abandoned.signal });
+    work = building;
+    building.catch(() => undefined); // once abandoned, its eventual failure is nobody's concern
+    const kit = await Promise.race([building, timeout]);
     return { status: "ok", kit, error: null };
   } catch (error) {
     return failure(error);

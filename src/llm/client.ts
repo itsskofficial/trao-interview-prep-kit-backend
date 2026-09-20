@@ -58,8 +58,14 @@ export function createLlmClient(options: LlmClientOptions): LlmClient {
       const queuedAt = clock.now();
       const reservation = await slot.limiter.acquire(estimateTokens(promptText, request.maxOutputTokens));
       const sentAt = clock.now();
-      const record = (fields: Pick<LlmCallRecord, "outcome" | "usage" | "error">): void =>
-        call.report({ step, provider: slot.provider.name, attempt: attempt + 1, kind: call.kind, queuedMs: sentAt - queuedAt, latencyMs: clock.now() - sentAt, ...fields });
+      // Observers are told, never obeyed: one that throws must not turn a good answer into a retried "network" failure.
+      const record = (fields: Pick<LlmCallRecord, "outcome" | "usage" | "error">): void => {
+        try {
+          call.report({ step, provider: slot.provider.name, attempt: attempt + 1, kind: call.kind, queuedMs: sentAt - queuedAt, latencyMs: clock.now() - sentAt, ...fields });
+        } catch {
+          // nothing useful can be done with a broken observer from here
+        }
+      };
 
       try {
         const response = await slot.provider.complete(request, AbortSignal.timeout(timeoutMs));
@@ -133,7 +139,19 @@ interface Call<T> {
 
 /** Error text in a trace is one short line: enough to see what happened, never a dump of what the provider sent back. */
 function firstLine(message: string): string {
-  return message.split("\n")[0]!.slice(0, 200);
+  return scrubSecrets(message.split("\n")[0]!).slice(0, 200);
+}
+
+/**
+ * Keys travel in headers and are never put in a message by this code, but a trace is stored and shown,
+ * and an upstream error can quote anything. Whatever looks like a credential is removed on the way in.
+ */
+export function scrubSecrets(text: string): string {
+  return text
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 [redacted]")
+    .replace(/\b(AIza[0-9A-Za-z_-]{20,}|gsk_[0-9A-Za-z]{20,}|sk-[0-9A-Za-z_-]{20,})/g, "[redacted]")
+    .replace(/([?&](?:key|api_key|apikey|token|access_token)=)[^&\s]+/gi, "$1[redacted]")
+    .replace(/\/\/[^/\s:@]+:[^/\s@]+@/g, "//[redacted]@");
 }
 
 function check<T>(schema: z.ZodType<T>, text: string): Checked<T> {
