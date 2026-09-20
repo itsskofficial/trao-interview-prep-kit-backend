@@ -69,6 +69,14 @@ export const ResearchLogEntrySchema = z.object({
   reason: z.string().optional(),
 });
 
+/** The words a claim about the company rests on, copied from where they were found. */
+export const ResearchEvidenceSchema = z.object({
+  claim: z.string().min(1),
+  quote: z.string().min(1),
+  source: z.enum(["hiring-page", "public-discussion"]),
+  url: z.string().optional(),
+});
+
 export const KitSchema = z.object({
   source: z.object({
     company: z.string(),
@@ -109,6 +117,8 @@ export const KitSchema = z.object({
   interview_insights: z.array(z.string()).optional(),
   /** Extension: every source attempted during research. */
   research_log: z.array(ResearchLogEntrySchema).optional(),
+  /** Extension: for each hiring stage and interview insight, the sentence it was taken from. */
+  research_evidence: z.array(ResearchEvidenceSchema).optional(),
   /** Extension: plain-language honesty notes, e.g. a thin description or an unreachable site. */
   notes: z.array(z.string()).optional(),
   /** Extension: what produced this kit, so output can be compared across prompt and model changes. */
@@ -132,4 +142,5 @@ export type Question = z.infer<typeof QuestionSchema>;
 export type Flashcard = z.infer<typeof FlashcardSchema>;
 export type ScheduleDay = z.infer<typeof ScheduleDaySchema>;
 export type ResearchLogEntry = z.infer<typeof ResearchLogEntrySchema>;
+export type ResearchEvidence = z.infer<typeof ResearchEvidenceSchema>;
 export type Kit = z.infer<typeof KitSchema>;

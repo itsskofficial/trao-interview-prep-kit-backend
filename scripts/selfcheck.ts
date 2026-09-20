@@ -9,6 +9,7 @@ import type { Kit } from "../src/kit/schema";
 import { validateKit } from "../src/kit/validate";
 import { createLlmClientFromConfig } from "../src/llm";
 import { createPageFetcher } from "../src/retrieval/fetcher";
+import { createEmbedderFromConfig } from "../src/similarity";
 
 /**
  * Runs the batch pipeline over the fixture companies with a live model and
@@ -119,6 +120,7 @@ if (values.from) {
   output = await runBatch(cases, {
     llm: createLlmClientFromConfig(config),
     fetcher,
+    embedder: createEmbedderFromConfig(config, (reason) => console.log(`  embeddings unavailable (${reason}); compared lexically`)),
     concurrency: config.BATCH_CONCURRENCY,
     caseTimeoutMs: caseTimeoutMs(config),
     log: (line) => console.log(line),

@@ -179,6 +179,21 @@ describe("a server restart", () => {
     expect((await ada.get("/api/jobs")).body.jobs[0]).toMatchObject({ label: "left-in-the-queue", status: "succeeded" });
   });
 
+  it("recovers a job that the previous version of the runner left running, with no lease and no attempt count", async () => {
+    const ada = await api.signedIn();
+    const started = await ada.post("/api/jobs").send(newJob);
+    await api.runner.idle();
+    await api.db.kits.deleteMany({});
+    await api.db.jobs.updateOne({}, { $set: { status: "running", active: true }, $unset: { kitId: "", attempts: "", lease: "" } });
+
+    const next = anotherProcess();
+    await next.start();
+    await next.idle();
+    await next.release();
+
+    expect((await ada.get(`/api/jobs/${started.body.job.id}`)).body.job.status).toBe("succeeded");
+  });
+
   it("stops retrying a job that has taken its process down twice, and lets the user retry it by hand", async () => {
     const ada = await api.signedIn();
     const started = await ada.post("/api/jobs").send(newJob);

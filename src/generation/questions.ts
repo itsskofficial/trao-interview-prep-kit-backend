@@ -39,7 +39,7 @@ export const CATEGORY_BRIEF: Record<QuestionCategory, string> = {
 export const SHARED_RULES = `Rules:
 - Use only the requirement ids you are given. Every question lists the ids of the requirements it covers; use an empty list only if it covers none of them.
 - Every listed requirement must be covered by at least one question.
-- "difficulty" is 1 (warm-up), 2 (standard) or 3 (hard).
+- "difficulty" is 1, 2 or 3, labelled honestly for this role's seniority. 1 is a warm-up: recall, a definition, or a simple example. 2 is a realistic scenario with one main concern. 3 is reserved for competing constraints, scale, ambiguity or senior-level judgement; a "tell me about a time" question is a 3 only when the situation it asks for is genuinely high-stakes. Use a mix, not one label for everything.
 - "answer_outline" is a short outline of a strong answer, not a full essay.
 - Do not invent facts about the company or the role.
 - ${UNTRUSTED_CONTENT_RULE}`;

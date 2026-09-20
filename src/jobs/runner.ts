@@ -176,6 +176,10 @@ export function createJobRunner(db: Database, pipeline: PipelineDeps, options: J
     async start() {
       // Jobs written before attempts were counted have no count to compare; they have had none.
       await db.jobs.updateMany({ active: true, attempts: { $exists: false } }, { $set: { attempts: 0 } });
+      // A job the previous version of this runner was in the middle of has no lease to lapse, so nothing would ever
+      // reclaim it or close it: it would sit in "running", hold one of its owner's slots and block the same posting from
+      // being submitted again. It is put back in the queue, and the attempt cap applies to it from here like any other.
+      await db.jobs.updateMany({ active: true, status: "running", lease: { $exists: false } }, { $set: { status: "queued", steps: [], updatedAt: now() } });
       const closed = await closeExhausted();
       poll = setInterval(() => {
         void closeExhausted().catch(() => undefined);

@@ -44,7 +44,8 @@ function answer({ system, prompt }: ProviderRequest): unknown {
     return {
       summary: page.slice(1, 3).join(" ").slice(0, 400) || "A company.",
       what_they_do: page.slice(1, 2).join(" ").slice(0, 300),
-      hiring_stages: stages.map((line) => line.split(/[.(]/)[0]!.trim()),
+      // The list marker is not part of the stage: "1. Recruiter screen (30 min)" names the stage "Recruiter screen".
+      hiring_stages: stages.map((line) => ({ stage: (BULLET.exec(line)?.[1] ?? line).split(/[.(]/)[0]!.trim(), evidence: line.trim() })).filter(({ stage }) => stage.length > 1),
       interview_insights: [],
     };
   }

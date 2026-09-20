@@ -3,13 +3,14 @@ import { SYSTEM as EXTRACTION } from "../extraction/extract";
 import { SYSTEM as BRIEF } from "../generation/brief";
 import { SYSTEM as FLASHCARDS } from "../generation/flashcards";
 import { CATEGORY_BRIEF, SHARED_RULES } from "../generation/questions";
+import { SYSTEM as LINK_PICKER } from "../retrieval/pick-links";
 
 /** Bumped when the pipeline's steps or their order change. Prompt changes are tracked by the fingerprint instead. */
 export const PIPELINE_VERSION = "2.0.0";
 
 /** Every instruction the pipeline gives a model. A prompt added to the pipeline is added here. */
 export function pipelinePrompts(): string[] {
-  return [EXTRACTION, BRIEF, FLASHCARDS, SHARED_RULES, ...Object.values(CATEGORY_BRIEF)];
+  return [EXTRACTION, BRIEF, FLASHCARDS, SHARED_RULES, ...Object.values(CATEGORY_BRIEF), LINK_PICKER];
 }
 
 /**
