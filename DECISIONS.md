@@ -208,7 +208,7 @@ Last run over the five fixture kits, judged by Groq's gpt-oss-120b: 4.5 of 5 ove
 
 ## 34. Priority by wording, measured; and the policy the numbers asked for
 
-Must or nice was "the line's wording, then the heading, then the model", on the theory that the model could not be trusted with it. That had never been measured. `fixtures/priority-cases.json` holds 42 awkward phrasings the rule was tuned on and 20 written afterwards that are never tuned against, and `npm run measure:priority` runs the real extraction prompt over them:
+Must or nice was "the line's wording, then the heading, then the model", on the theory that the model could not be trusted with it. That had never been measured. `fixtures/priority-cases.json` holds 42 awkward phrasings the rule was tuned on and 20 written afterwards that are never tuned against, and `npm run measure:priority` runs the real extraction prompt over them. Three of the 62 are labelled "defer" (the posting gives no signal either way, so there is no right answer to score; an offline test checks the rule stays silent on them), which leaves 40 and 19 scored:
 
 | Policy | Tuned on | Held out |
 |---|---|---|
@@ -220,7 +220,7 @@ Three of the old policy's four held-out mistakes had one cause: a heading like "
 
 ## 35. The jobs collection is the queue
 
-Jobs lived in one process, and a restart marked whatever was running as interrupted. On a host that redeploys on every merge, that is a failure the user sees for something that was not their doing. Now a job is claimed with one atomic update that sets a lease; the lease is renewed while the job runs; a process that dies stops renewing, and once the lease lapses another process runs the job again, twice at most. A process told to stop hands its jobs back at once with the attempt refunded. A process that finds its lease taken stops and stores nothing, and a kit stored by a run that lost the job in that very instant is removed, so a job can never produce two kits. No new service: MongoDB was already there. A run that has been given up on now also stops at its next step instead of fetching every page and assembling a kit nobody is waiting for.
+Jobs lived in one process, and a restart marked whatever was running as interrupted. On a host that redeploys on every merge, that is a failure the user sees for something that was not their doing. Now a job is claimed with one atomic update that sets a lease; the lease is renewed while the job runs; a process that dies stops renewing, and once the lease lapses another process runs the job again, twice at most. A process told to stop hands its jobs back at once with the attempt refunded. A process that finds its lease taken stops and stores nothing, and a kit stored by a run that lost the job in that very instant is removed, so a job does not leave two kits behind. That is cleanup rather than a constraint: a process that died between storing the kit and removing it would leave one extra kit, which the user can delete. Kits are not keyed by job, because a user may deliberately generate a second kit for the same posting. No new service: MongoDB was already there. A run that has been given up on now also stops at its next step instead of fetching every page and assembling a kit nobody is waiting for.
 
 Review caught the deployment case: a job mid-run when this version was deployed had no lease to lapse, and would have sat in "running" for ever, holding a slot and blocking resubmission. `start()` puts such jobs back in the queue.
 
