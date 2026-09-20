@@ -64,51 +64,59 @@ describe("public discussion search", () => {
 });
 
 describe("the optional web search", () => {
-  const brave = (url: string) =>
+  const isSearch = (url: string) => url.includes("api.langsearch.com");
+  const keyless = (url: string) => json(url, url.includes("algolia") ? { hits: [] } : { items: [] });
+  const found = (url: string) =>
     json(url, {
-      web: {
-        results: [
-          { title: "My Initech interview", url: "https://blog.example/initech-interview", description: "The <strong>Initech</strong> interview was a recruiter call and then a take-home." },
-          { title: "Initech pricing", url: "https://initech.example/pricing", description: "Plans start at $9." },
-          { title: "Initech interview", url: "javascript:alert(1)", description: "Initech interview, from an address that is not a web page." },
-        ],
+      code: 200,
+      data: {
+        webPages: {
+          value: [
+            { name: "My Initech interview", url: "https://blog.example/initech-interview", snippet: "The <strong>Initech</strong> interview was a recruiter call and then a take-home." },
+            { name: "Initech pricing", url: "https://initech.example/pricing", snippet: "Plans start at $9." },
+            { name: "Initech interview", url: "javascript:alert(1)", snippet: "Initech interview, from an address that is not a web page." },
+          ],
+        },
       },
     });
 
-  it("says it could not read a response it does not recognise, rather than reporting that nothing was found", async () => {
-    const answers = (body: unknown): PageFetcher => ({ close: async () => undefined, fetchPage: async (url) => json(url, url.includes("brave") ? body : url.includes("algolia") ? { hits: [] } : { items: [] }) });
-    const logOf = async (body: unknown) => (await createDiscussionSearch(answers(body), { braveApiKey: "k" })("Initech")).log.find((entry) => entry.source === "web-search");
-
-    expect(await logOf({ message: "quota exceeded" })).toMatchObject({ outcome: "skipped" });
-    expect(await logOf({ type: "search", web: { results: "soon" } })).toMatchObject({ outcome: "skipped" });
-    // A search that found no web results leaves the section out, and that is a real "nothing found".
-    expect(await logOf({ type: "search", query: { original: "x" } })).toMatchObject({ outcome: "empty" });
-  });
-
   it("is not asked without a key, so a clean clone behaves exactly as before", async () => {
-    const fetcher = fetcherReturning((url) => json(url, url.includes("algolia") ? { hits: [] } : { items: [] }));
+    const fetcher = fetcherReturning(keyless);
     await createDiscussionSearch(fetcher)("Initech");
-    expect(fetcher.urls.some((url) => url.includes("brave"))).toBe(false);
+    expect(fetcher.urls.some(isSearch)).toBe(false);
   });
 
   it("adds relevant results when a key is configured, through the same filters as every other source", async () => {
-    const seen: Array<{ url: string; headers?: Record<string, string> }> = [];
+    const seen: Array<{ url: string; headers?: Record<string, string>; jsonBody?: unknown }> = [];
     const fetcher: PageFetcher = {
       close: async () => undefined,
       fetchPage: async (url, _accept, options) => {
-        seen.push({ url, headers: options?.headers });
-        return url.includes("brave") ? brave(url) : json(url, url.includes("algolia") ? { hits: [] } : { items: [] });
+        seen.push({ url, headers: options?.headers, jsonBody: options?.jsonBody });
+        return isSearch(url) ? found(url) : keyless(url);
       },
     };
-    const result = await createDiscussionSearch(fetcher, { braveApiKey: "a-secret-key" })("Initech");
+    const result = await createDiscussionSearch(fetcher, { langSearchApiKey: "a-secret-key" })("Initech");
 
     expect(result.snippets).toEqual([{ source: "web-search", url: "https://blog.example/initech-interview", text: "My Initech interview - The Initech interview was a recruiter call and then a take-home." }]);
     expect(result.log).toContainEqual({ source: "web-search", outcome: "used", reason: "1 relevant result(s)" });
 
-    // The key goes in a header to that one service, never in an address, and to nobody else.
-    const asked = seen.find((request) => request.url.includes("brave"))!;
-    expect(asked.headers).toEqual({ "X-Subscription-Token": "a-secret-key" });
+    // The query travels in the body and the key in a header, to that one service. Neither is ever part of an address.
+    const asked = seen.find((request) => isSearch(request.url))!;
+    expect(asked.url).toBe("https://api.langsearch.com/v1/web-search");
+    expect(asked.headers).toEqual({ Authorization: "Bearer a-secret-key" });
+    expect(asked.jsonBody).toMatchObject({ query: expect.stringContaining('"Initech" interview'), count: 10 });
     expect(seen.map((request) => request.url).join(" ")).not.toContain("a-secret-key");
-    expect(seen.filter((request) => !request.url.includes("brave")).every((request) => request.headers === undefined)).toBe(true);
+    expect(seen.filter((request) => !isSearch(request.url)).every((request) => request.headers === undefined && request.jsonBody === undefined)).toBe(true);
+  });
+
+  it("says it could not read a response it does not recognise, rather than reporting that nothing was found", async () => {
+    const answers = (body: unknown): PageFetcher => ({ close: async () => undefined, fetchPage: async (url) => (isSearch(url) ? json(url, body) : keyless(url)) });
+    const logOf = async (body: unknown) => (await createDiscussionSearch(answers(body), { langSearchApiKey: "k" })("Initech")).log.find((entry) => entry.source === "web-search");
+
+    expect(await logOf({ code: 429, msg: "daily allowance used" })).toMatchObject({ outcome: "skipped" });
+    expect(await logOf({ data: { webPages: { value: "soon" } } })).toMatchObject({ outcome: "skipped" });
+    // A search that found nothing still answers properly, and that is a real "nothing found".
+    expect(await logOf({ data: { webPages: { value: [] } } })).toMatchObject({ outcome: "empty" });
+    expect(await logOf({ data: { queryContext: { originalQuery: "x" } } })).toMatchObject({ outcome: "empty" });
   });
 });

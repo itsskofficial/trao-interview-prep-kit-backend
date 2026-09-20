@@ -4,7 +4,7 @@ import { z } from "zod";
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   /** Optional. Adds a general web search to the two keyless discussion sources. */
-  BRAVE_SEARCH_API_KEY: z.string().default(""),
+  LANGSEARCH_API_KEY: z.string().default(""),
   LOG_LEVEL: z.enum(["silent", "error", "warn", "info", "debug"]).default("info"),
   // "offline" is a mechanical stand-in for local development and interface tests. It is refused in production.
   LLM_PROVIDER: z.enum(["gemini", "groq", "offline"]).default("gemini"),

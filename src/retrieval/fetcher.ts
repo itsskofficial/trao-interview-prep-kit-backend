@@ -44,6 +44,11 @@ export interface FetchOptions {
    * to anywhere else goes without them, so a key cannot be walked off to another host.
    */
   headers?: Record<string, string>;
+  /**
+   * A JSON body, which makes the request a POST. For a search API that takes its query that way. Like the headers it
+   * goes only to the origin that was asked for: a POST that is redirected is refused rather than re-sent elsewhere.
+   */
+  jsonBody?: unknown;
 }
 
 export interface PageFetcher {
@@ -110,14 +115,15 @@ export function createPageFetcher(options: FetcherOptions): PageFetcher {
     return run;
   }
 
-  async function requestOnce(url: URL, accept: Accept, extraHeaders: Record<string, string> = {}): Promise<Exchange> {
+  async function requestOnce(url: URL, accept: Accept, extraHeaders: Record<string, string> = {}, jsonBody?: unknown): Promise<Exchange> {
     let response;
     try {
       response = await undiciFetch(url, {
         dispatcher,
         redirect: "manual",
         signal: AbortSignal.timeout(timeoutMs),
-        headers: { ...extraHeaders, "User-Agent": USER_AGENT, Accept: ACCEPT_HEADER[accept] },
+        ...(jsonBody !== undefined ? { method: "POST", body: JSON.stringify(jsonBody) } : {}),
+        headers: { ...extraHeaders, ...(jsonBody !== undefined ? { "Content-Type": "application/json" } : {}), "User-Agent": USER_AGENT, Accept: ACCEPT_HEADER[accept] },
       });
     } catch (error) {
       return classifyFailure(url.href, error);
@@ -173,9 +179,9 @@ export function createPageFetcher(options: FetcherOptions): PageFetcher {
   }
 
   /** One URL, with backoff on the failures worth retrying: 429, 5xx, timeouts and network errors. */
-  async function requestWithRetry(url: URL, accept: Accept, extraHeaders?: Record<string, string>): Promise<Exchange> {
+  async function requestWithRetry(url: URL, accept: Accept, extraHeaders?: Record<string, string>, jsonBody?: unknown): Promise<Exchange> {
     for (let attempt = 0; ; attempt++) {
-      const result = await paced(url, () => requestOnce(url, accept, extraHeaders));
+      const result = await paced(url, () => requestOnce(url, accept, extraHeaders, jsonBody));
       if ("redirectTo" in result || result.ok || attempt >= retries || !isRetryable(result)) return result;
 
       const retryAfterSeconds = Number(/retry-after (\d+)/.exec(result.detail)?.[1]);
@@ -211,8 +217,10 @@ export function createPageFetcher(options: FetcherOptions): PageFetcher {
       }
 
       askedOrigin ??= checked.url.origin;
-      const result = await requestWithRetry(checked.url, accept, checked.url.origin === askedOrigin ? options.headers : undefined);
+      const result = await requestWithRetry(checked.url, accept, checked.url.origin === askedOrigin ? options.headers : undefined, options.jsonBody);
       if (!("redirectTo" in result)) return result;
+      // A search query is not something to follow a stranger's redirect with.
+      if (options.jsonBody !== undefined) return { ok: false, url: checked.url.href, reason: "http_error", detail: "The service answered a POST with a redirect, which is not followed.", status: 302 };
 
       // Every hop goes back through validation and robots.txt, so a redirect cannot smuggle in a private address.
       current = result.redirectTo;

@@ -19,16 +19,18 @@ interface Source {
   url: (query: string) => string;
   /** Sent to this source's own origin only, and never recorded. */
   headers?: Record<string, string>;
+  /** For a source that takes its query in a JSON body rather than in the address. */
+  body?: (query: string) => unknown;
   read: (body: unknown) => DiscussionSnippet[];
 }
 
 export interface DiscussionOptions {
   /**
-   * A Brave Search API key. Optional. Most of what is written about a company's interviews is on blogs and forums that
-   * neither keyless source covers, and a general web search finds it. Without a key nothing changes, which is how an
-   * evaluator's clean clone runs.
+   * A LangSearch API key. Optional. Most of what is written about a company's interviews is on blogs and forums that
+   * neither keyless source covers, and a general web search finds it. LangSearch has a free plan (1,000 searches a day),
+   * and a kit makes one. Without a key nothing changes, which is how an evaluator's clean clone runs.
    */
-  braveApiKey?: string;
+  langSearchApiKey?: string;
 }
 
 /**
@@ -60,29 +62,32 @@ const SOURCES: Source[] = [
 ];
 
 /** A general web search, used only when a key is configured. Its results are strangers' text like any other and go through the same filters. */
-const braveSearch = (apiKey: string): Source => ({
+const langSearch = (apiKey: string): Source => ({
   name: "web-search",
-  url: (query) => `https://api.search.brave.com/res/v1/web/search?count=10&q=${encodeURIComponent(`${query} process experience`)}`,
-  headers: { "X-Subscription-Token": apiKey },
+  url: () => "https://api.langsearch.com/v1/web-search",
+  headers: { Authorization: `Bearer ${apiKey}` },
+  body: (query) => ({ query: `${query} process experience`, count: 10, summary: false }),
   read: (body) =>
-    braveResults(body).flatMap((result) =>
-      typeof result.url === "string" && /^https?:\/\//.test(result.url) ? [{ source: "web-search", url: result.url, text: stripTags(`${result.title ?? ""} - ${result.description ?? ""}`) }] : [],
+    langSearchResults(body).flatMap((result) =>
+      typeof result.url === "string" && /^https?:\/\//.test(result.url) ? [{ source: "web-search", url: result.url, text: stripTags(`${result.name ?? ""} - ${result.snippet ?? result.summary ?? ""}`) }] : [],
     ),
 });
 
-interface BraveResult { title?: string; url?: string; description?: string }
+interface LangSearchResult { name?: string; url?: string; snippet?: string; summary?: string }
 
 /**
- * A search with no web results leaves `web` out, and that is an honest "nothing found". Anything else without a list of
- * results is not the response this was written for, and saying "nothing found" about it would be a guess: it throws, and the
- * source is logged as unreadable.
+ * A search that found nothing still answers with an (empty) list, and that is an honest "nothing found". Anything without
+ * a list of results is not the response this was written for, and saying "nothing found" about it would be a guess: it
+ * throws, and the source is logged as unreadable.
  */
-function braveResults(body: unknown): BraveResult[] {
-  const answer = body as { type?: unknown; web?: { results?: unknown } } | null;
-  if (answer && typeof answer === "object" && Array.isArray(answer.web?.results)) return answer.web.results as BraveResult[];
-  if (answer && typeof answer === "object" && answer.type === "search" && answer.web === undefined) return [];
+function langSearchResults(body: unknown): LangSearchResult[] {
+  const answer = body as { data?: { webPages?: { value?: unknown } | null } } | null;
+  const pages = answer && typeof answer === "object" ? answer.data?.webPages : undefined;
+  if (pages && Array.isArray(pages.value)) return pages.value as LangSearchResult[];
+  if (answer && typeof answer === "object" && answer.data && typeof answer.data === "object" && (pages === undefined || pages === null)) return [];
   throw new Error("Unexpected web search response.");
 }
+
 interface HnHit { objectID: string; title?: string; story_title?: string; comment_text?: string; story_text?: string }
 interface SeItem { question_id: number; title?: string; excerpt?: string }
 
@@ -97,7 +102,7 @@ const MAX_SNIPPET_CHARS = 600;
  * used, empty or skipped; none of them can fail the run.
  */
 export function createDiscussionSearch(fetcher: PageFetcher, options: DiscussionOptions = {}): DiscussionSearch {
-  const sources = options.braveApiKey ? [...SOURCES, braveSearch(options.braveApiKey)] : SOURCES;
+  const sources = options.langSearchApiKey ? [...SOURCES, langSearch(options.langSearchApiKey)] : SOURCES;
   return async (company) => {
     const name = company.trim();
     if (name.length < 2) {
@@ -110,8 +115,9 @@ export function createDiscussionSearch(fetcher: PageFetcher, options: Discussion
 
     await Promise.all(
       sources.map(async (source) => {
-        const url = source.url(`"${name}" interview`);
-        const result = await fetcher.fetchPage(url, "json", source.headers ? { headers: source.headers } : undefined);
+        const query = `"${name}" interview`;
+        const url = source.url(query);
+        const result = await fetcher.fetchPage(url, "json", source.headers || source.body ? { headers: source.headers, ...(source.body ? { jsonBody: source.body(query) } : {}) } : undefined);
         if (!result.ok) {
           log.push({ source: source.name, outcome: "skipped", reason: `${result.reason}: ${result.detail}` });
           return;

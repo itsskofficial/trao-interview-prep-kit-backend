@@ -212,21 +212,60 @@ describe("cleanHtml", () => {
   });
 });
 
-describe("request headers for a keyed API", () => {
-  it("are sent to the origin that was asked for, and not to wherever it redirects", async () => {
+describe("requests to a keyed API", () => {
+  const read = (request: import("node:http").IncomingMessage) =>
+    new Promise<string>((resolve) => {
+      let body = "";
+      request.on("data", (chunk) => (body += chunk));
+      request.on("end", () => resolve(body));
+    });
+
+  it("send headers to the origin that was asked for, and not to wherever it redirects", async () => {
     const received: Record<string, string | undefined> = {};
-    const elsewhere = await startSite({ "/landed": (request, response) => { received.elsewhere = request.headers["x-subscription-token"] as string | undefined; response.writeHead(200, { "content-type": "application/json" }).end("{}"); } });
+    const elsewhere = await startSite({ "/landed": (request, response) => { received.elsewhere = request.headers["x-api-key"] as string | undefined; response.writeHead(200, { "content-type": "application/json" }).end("{}"); } });
     const api = await startSite({
-      "/search": (request, response) => { received.api = request.headers["x-subscription-token"] as string | undefined; response.writeHead(302, { location: `${elsewhere.origin.replace("localhost", "127.0.0.1")}/landed` }).end(); },
+      "/search": (request, response) => { received.api = request.headers["x-api-key"] as string | undefined; response.writeHead(302, { location: `${elsewhere.origin.replace("localhost", "127.0.0.1")}/landed` }).end(); },
     });
     const fetcher = createPageFetcher({ allowPrivate: true, localDelayMs: 0, retries: 0, timeoutMs: 2_000 });
 
-    const result = await fetcher.fetchPage(`${api.origin}/search`, "json", { headers: { "X-Subscription-Token": "a-secret-key" } });
+    const result = await fetcher.fetchPage(`${api.origin}/search`, "json", { headers: { "X-Api-Key": "a-secret-key" } });
     await fetcher.close();
     await api.close();
     await elsewhere.close();
 
     expect(result.ok).toBe(true);
     expect(received).toEqual({ api: "a-secret-key", elsewhere: undefined });
+  });
+
+  it("post a JSON body when given one", async () => {
+    const received: { method?: string; type?: string; auth?: string; body?: string } = {};
+    const api = await startSite({
+      "/v1/web-search": async (request, response) => {
+        Object.assign(received, { method: request.method, type: request.headers["content-type"], auth: request.headers.authorization, body: await read(request) });
+        response.writeHead(200, { "content-type": "application/json" }).end('{"data":{"webPages":{"value":[]}}}');
+      },
+    });
+    const fetcher = createPageFetcher({ allowPrivate: true, localDelayMs: 0, retries: 0, timeoutMs: 2_000 });
+    const result = await fetcher.fetchPage(`${api.origin}/v1/web-search`, "json", { headers: { Authorization: "Bearer a-secret-key" }, jsonBody: { query: '"Initech" interview', count: 10 } });
+    await fetcher.close();
+    await api.close();
+
+    expect(result).toMatchObject({ ok: true, body: '{"data":{"webPages":{"value":[]}}}' });
+    expect(received).toEqual({ method: "POST", type: "application/json", auth: "Bearer a-secret-key", body: '{"query":"\\"Initech\\" interview","count":10}' });
+  });
+
+  it("do not follow a redirect with a body: the query goes to the service that was asked, or nowhere", async () => {
+    let landed = false;
+    const elsewhere = await startSite({ "/landed": (_request, response) => { landed = true; response.writeHead(200, { "content-type": "application/json" }).end("{}"); } });
+    const api = await startSite({ "/search": (_request, response) => response.writeHead(307, { location: `${elsewhere.origin}/landed` }).end() });
+    const fetcher = createPageFetcher({ allowPrivate: true, localDelayMs: 0, retries: 0, timeoutMs: 2_000 });
+
+    const result = await fetcher.fetchPage(`${api.origin}/search`, "json", { jsonBody: { query: "x" } });
+    await fetcher.close();
+    await api.close();
+    await elsewhere.close();
+
+    expect(result).toMatchObject({ ok: false, reason: "http_error" });
+    expect(landed).toBe(false);
   });
 });
