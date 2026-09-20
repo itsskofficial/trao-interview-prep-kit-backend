@@ -119,7 +119,17 @@ export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher,
       aboutScore: parent?.aboutScore ?? 0,
     };
     pages.push(page);
-    log.push({ source: "company-site", url: result.url, outcome: clean.text.length > 0 ? "used" : "empty", ...(clean.text.length === 0 ? { reason: "The page has no readable text; it may need JavaScript to render." } : {}) });
+    log.push({
+      source: "company-site",
+      url: result.url,
+      outcome: clean.text.length > 0 ? "used" : "empty",
+      ...(clean.text.length === 0
+        ? { reason: "The page has no readable text and none embedded in its HTML; it probably needs a browser to render." }
+        : clean.textSource === "embedded"
+          ? // Why the page showed so little is not known from here, only that it did.
+            { reason: "The page showed almost no text of its own, so its text was read from content embedded in its HTML (noscript, page data, structured data or its description)." }
+          : {}),
+    });
 
     if (depth < maxDepth) enqueue(clean.links, depth + 1, Math.max(parent?.hiringScore ?? 0, page.processScore >= MIN_PROCESS_TERMS ? 9 : 0));
     return page;

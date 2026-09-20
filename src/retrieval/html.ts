@@ -13,6 +13,11 @@ export interface CleanPage {
   description: string;
   /** Visible text only, one block per line. */
   text: string;
+  /**
+   * "embedded" when the page showed almost nothing without JavaScript and the text was read from what it ships for its
+   * own scripts to render: noscript blocks, hydration JSON, structured data. The crawl says so in the research log.
+   */
+  textSource: "visible" | "embedded";
   links: PageLink[];
 }
 
@@ -34,6 +39,8 @@ export function cleanHtml(html: string, pageUrl: string, maxTextChars = 20_000):
 
   // Links are read before anything is removed: a nav inside a hidden mobile menu is still a real link.
   const links = collectLinks($, base);
+  // So is what the page ships for its own scripts, which is about to be removed with them.
+  const shipped = shippedForScripts($);
 
   $(NEVER_CONTENT).remove();
   $(HIDDEN_BY_ATTRIBUTE).remove();
@@ -45,7 +52,8 @@ export function cleanHtml(html: string, pageUrl: string, maxTextChars = 20_000):
   });
 
   const title = $("title").first().text().trim() || $("h1").first().text().trim();
-  const description = $('meta[name="description"]').attr("content")?.trim() ?? "";
+  // Client-rendered sites often fill in only the Open Graph tags, for link previews.
+  const description = ($('meta[name="description"]').attr("content") || $('meta[property="og:description"]').attr("content") || "").trim();
 
   // Prefer the page's own main content; chrome (nav, header, footer) is not what the company says about itself.
   const root = $($("main").get(0) ?? $("body").get(0) ?? $.root().get(0)!);
@@ -54,15 +62,90 @@ export function cleanHtml(html: string, pageUrl: string, maxTextChars = 20_000):
     $(element).append("\n");
   });
 
-  const text = root
-    .text()
+  const visible = toLines(root.text()).join("\n").slice(0, maxTextChars);
+  if (visible.length >= THIN_PAGE_CHARS) return { title, description, text: visible, textSource: "visible", links };
+
+  // A page that renders in the browser shows a crawler next to nothing. Most still ship their content in the HTML, for
+  // their own scripts to render: that is read instead of giving up, and it is no less a stranger's text than the rest.
+  const embedded = proseFrom(shipped, description).join("\n").slice(0, maxTextChars);
+  return embedded.length > visible.length ? { title, description, text: embedded, textSource: "embedded", links } : { title, description, text: visible, textSource: "visible", links };
+}
+
+/** Below this, a page has said nothing: a heading and a cookie notice. */
+const THIN_PAGE_CHARS = 400;
+const MAX_EMBEDDED_JSON_CHARS = 2_000_000;
+
+const toLines = (text: string): string[] =>
+  text
     .split("\n")
     .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .join("\n")
-    .slice(0, maxTextChars);
+    .filter(Boolean);
 
-  return { title, description, text, links };
+interface Shipped {
+  noscript: string[];
+  json: unknown[];
+}
+
+/** What a client-rendered page carries in its HTML: noscript fallbacks, hydration state (Next.js and the like), structured data. */
+function shippedForScripts($: cheerio.CheerioAPI): Shipped {
+  const noscript = $("body noscript")
+    .map((_, element) => $(element).text())
+    .get();
+  const json: unknown[] = [];
+  $('script#__NEXT_DATA__, script[type="application/json"], script[type="application/ld+json"]').each((_, element) => {
+    const raw = $(element).text();
+    if (raw.length === 0 || raw.length > MAX_EMBEDDED_JSON_CHARS) return;
+    try {
+      json.push(JSON.parse(raw));
+    } catch {
+      // Not JSON after all; nothing to read.
+    }
+  });
+  return { noscript, json };
+}
+
+/**
+ * Words a person would read, as opposed to the ids, paths, class names and tokens that make up most of a hydration
+ * payload. Deliberately short enough to keep a list item like "Recruiter call (30 minutes)": on a hiring page the
+ * stages are exactly the short lines.
+ */
+function looksLikeProse(value: string): boolean {
+  if (value.length < 15 || value.length > 5_000) return false;
+  if (/^(https?:|\/|data:|#|[\w.-]+\.(js|css|png|jpe?g|svg|webp|woff2?)\b)/i.test(value)) return false;
+  const words = value.split(/\s+/);
+  if (words.length < 3) return false;
+  // Minified code and encoded blobs have long unbroken runs and few ordinary words.
+  const ordinary = words.filter((word) => /^[(“"']?[\p{L}'’-]{2,}[.,;:!?)”"']*$/u.test(word)).length;
+  return ordinary / words.length >= 0.6;
+}
+
+function proseFrom(shipped: Shipped, description: string): string[] {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  const add = (text: string) => {
+    // Content systems store rich text as HTML strings. It is cleaned like any other markup, hidden parts included.
+    // Anything that could be markup goes through the cleaner, a lone comment included: "<!-- ... -->" has no tag in it,
+    // and would otherwise walk in as a sentence.
+    const plain = /<[a-z!/][^>]*>/i.test(text) ? cleanHtml(`<body>${text}</body>`, "http://embedded.invalid/", 20_000).text : text;
+    for (const line of toLines(plain)) {
+      if (!looksLikeProse(line) || seen.has(line)) continue;
+      seen.add(line);
+      lines.push(line);
+    }
+  };
+
+  for (const block of shipped.noscript) add(block);
+  let budget = 5_000; // values visited, so a huge state tree cannot hold a crawl up
+  const walk = (value: unknown, depth: number): void => {
+    if (budget-- <= 0 || depth > 12) return;
+    if (typeof value === "string") add(value);
+    else if (Array.isArray(value)) for (const entry of value) walk(entry, depth + 1);
+    else if (value && typeof value === "object") for (const entry of Object.values(value)) walk(entry, depth + 1);
+  };
+  for (const tree of shipped.json) walk(tree, 0);
+
+  if (lines.length === 0 && looksLikeProse(description)) lines.push(description);
+  return lines;
 }
 
 function collectLinks($: cheerio.CheerioAPI, base: string): PageLink[] {
