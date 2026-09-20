@@ -97,6 +97,8 @@ describe("priority when the wording is mixed or unusual", () => {
     expect(prioritySignals(under(heading, "Elixir"), "Elixir").heading).toBeUndefined();
     const line = "You do not need to have used Rust before";
     expect(prioritySignals(under("Requirements", line), line).line).toBeUndefined();
+    const contracted = "You needn't have a degree";
+    expect(prioritySignals(under("Requirements", contracted), contracted).line).toBeUndefined();
     // Still a requirement when it is one.
     expect(prioritySignals(under("Requirements", "You need to be able to work UK hours"), "You need to be able to work UK hours").line).toBe("must");
   });

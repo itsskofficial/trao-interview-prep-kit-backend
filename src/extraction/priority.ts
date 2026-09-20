@@ -16,7 +16,7 @@ const NICE = [
 const MUST_ON_LINE = [
   /\brequired\b/, /\bmust\b/, /\bessential\b/, /\bmandatory\b/, /\bminimum\b/, /\bnon-?negotiables?\b/, /\bmust[- ]haves?\b/,
   // "You don't need to tick every box" is the opposite of a requirement.
-  /(?<!n't |not |never |no )\bneed to\b/, /\byou need\b/, /\byou('ll| will) need\b/, /\bneeds to\b/,
+  /(?<!n't |not |never |no )\bneed to\b/, /\byou need\b(?!n't)/, /\byou('ll| will) need\b/, /\bneeds to\b/,
 ];
 
 /** Section headings that introduce must-haves. Too loose to apply to an individual line. */
