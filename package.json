@@ -18,6 +18,7 @@
     "dev:offline": "tsx scripts/dev-offline.ts",
     "calibrate": "tsx scripts/calibrate-similarity.ts",
     "judge": "tsx scripts/judge.ts",
+    "test:coverage": "vitest run --coverage",
     "measure:priority": "tsx scripts/measure-priority.ts"
   },
   "dependencies": {
@@ -43,6 +44,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.6.2",
     "@types/supertest": "^7.2.1",
+    "@vitest/coverage-v8": "^5.0.1",
     "mongodb-memory-server": "^11.2.0",
     "supertest": "^7.2.2",
     "typescript": "^7.0.2",

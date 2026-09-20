@@ -67,7 +67,7 @@ describe("request and job logging", () => {
     api = await startTestApi({}, { llm: model.llm });
     const logger = createLogger("debug", log.stream);
     // The same database and configuration, with a logger that can be read.
-    api.runner = createJobRunner(api.db, { llm: model.llm, fetcher: { fetchPage: async (url) => ({ ok: false, url, reason: "network", detail: "" }), close: async () => undefined } }, 2, logger);
+    api.runner = createJobRunner(api.db, { llm: model.llm, fetcher: { fetchPage: async (url) => ({ ok: false, url, reason: "network", detail: "" }), close: async () => undefined } }, { logger });
     api.app = createApp({ db: api.db, config: api.config, runner: api.runner, regenerator: api.regenerator, logger });
   }, 120_000);
   afterAll(() => api.close());

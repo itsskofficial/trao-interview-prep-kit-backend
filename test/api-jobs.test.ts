@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { fingerprintOf } from "../src/jobs/runner";
+import { ObjectId } from "mongodb";
+import { createJobRunner, fingerprintOf } from "../src/jobs/runner";
 import { ProviderError } from "../src/llm/types";
 import { startTestApi, type TestApi } from "./support/api";
 import { routedModel } from "./support/model";
@@ -124,21 +125,174 @@ describe("a job that fails", () => {
 });
 
 describe("a server restart", () => {
-  it("marks unfinished jobs as interrupted so they can be retried", async () => {
+  const unreachable = { fetchPage: async (url: string) => ({ ok: false as const, url, reason: "network" as const, detail: "" }), close: async () => undefined };
+  /** A second process over the same database, as a redeploy or a second instance would be. */
+  const anotherProcess = (options: Parameters<typeof createJobRunner>[2] = {}) => createJobRunner(api.db, { llm: model.llm, fetcher: unreachable }, options);
+  /** A job put straight into the queue, as one left there by a process that has gone. */
+  const queued = async (fingerprint: string): Promise<ObjectId> => {
+    const userId = (await api.db.users.findOne({}))!._id;
+    const now = new Date();
+    const _id = new ObjectId();
+    await api.db.jobs.insertOne({ _id, userId, fingerprint, input: { jd: JD, companyUrl: "https://acme.example/", days: 3 }, label: fingerprint, status: "queued", active: true, attempts: 0, steps: [], createdAt: now, updatedAt: now });
+    return _id;
+  };
+  /** The job as a process that died mid-run would have left it: running, with a lease nobody is renewing. */
+  const abandonMidRun = async (attempts: number) => {
+    await api.db.kits.deleteMany({});
+    await api.db.jobs.updateOne({}, { $set: { status: "running", active: true, attempts, lease: { owner: "a-dead-process", expiresAt: new Date(Date.now() - 1_000) }, steps: [{ step: "extract", status: "done", at: new Date() }] }, $unset: { kitId: "" } });
+  };
+
+  it("picks up a job whose process died, and runs it again from the start", async () => {
     const ada = await api.signedIn();
     const started = await ada.post("/api/jobs").send(newJob);
     await api.runner.idle();
-    // Put the job back the way a process that died mid-run would have left it.
-    await api.db.jobs.updateOne({}, { $set: { status: "running", active: true }, $unset: { kitId: "" } });
-    await api.db.kits.deleteMany({});
+    await abandonMidRun(1);
 
-    expect(await api.runner.recoverInterrupted()).toBe(1);
+    await anotherProcess().idle();
+
+    const job = (await ada.get(`/api/jobs/${started.body.job.id}`)).body.job;
+    expect(job.status).toBe("succeeded");
+    expect(job.steps.filter((step: { step: string; status: string }) => step.step === "extract" && step.status === "done")).toHaveLength(1);
+    expect(await api.db.kits.countDocuments()).toBe(1);
+  });
+
+  it("leaves a job alone while the process running it is still renewing its lease", async () => {
+    const ada = await api.signedIn();
+    await ada.post("/api/jobs").send(newJob);
+    await api.runner.idle();
+    await api.db.kits.deleteMany({});
+    await api.db.jobs.updateOne({}, { $set: { status: "running", active: true, attempts: 1, lease: { owner: "a-live-process", expiresAt: new Date(Date.now() + 60_000) } }, $unset: { kitId: "" } });
+
+    await anotherProcess().idle();
+    expect(await api.db.jobs.findOne({})).toMatchObject({ status: "running", lease: { owner: "a-live-process" } });
+    await api.db.jobs.deleteMany({});
+  });
+
+  it("picks up jobs that were still queued when the process stopped", async () => {
+    const ada = await api.signedIn();
+    await queued("left-in-the-queue");
+
+    const next = anotherProcess();
+    expect(await next.start()).toBe(0);
+    await next.idle();
+    await next.release();
+    expect((await ada.get("/api/jobs")).body.jobs[0]).toMatchObject({ label: "left-in-the-queue", status: "succeeded" });
+  });
+
+  it("recovers a job that the previous version of the runner left running, with no lease and no attempt count", async () => {
+    const ada = await api.signedIn();
+    const started = await ada.post("/api/jobs").send(newJob);
+    await api.runner.idle();
+    await api.db.kits.deleteMany({});
+    await api.db.jobs.updateOne({}, { $set: { status: "running", active: true }, $unset: { kitId: "", attempts: "", lease: "" } });
+
+    const next = anotherProcess();
+    await next.start();
+    await next.idle();
+    await next.release();
+
+    expect((await ada.get(`/api/jobs/${started.body.job.id}`)).body.job.status).toBe("succeeded");
+  });
+
+  it("stops retrying a job that has taken its process down twice, and lets the user retry it by hand", async () => {
+    const ada = await api.signedIn();
+    const started = await ada.post("/api/jobs").send(newJob);
+    await api.runner.idle();
+    await abandonMidRun(2);
+
+    const next = anotherProcess();
+    expect(await next.start()).toBe(1);
+    await next.release();
 
     const job = (await ada.get(`/api/jobs/${started.body.job.id}`)).body.job;
     expect(job).toMatchObject({ status: "interrupted", error: { code: "INTERNAL" } });
     await ada.post(`/api/jobs/${job.id}/retry`).expect(202);
     await api.runner.idle();
     expect((await ada.get(`/api/jobs/${job.id}`)).body.job.status).toBe("succeeded");
+  });
+
+  it("hands a running job back when told to stop, and the next process finishes it without counting that against the job", async () => {
+    await api.signedIn();
+    let reached: () => void = () => undefined;
+    const inFlight = new Promise<void>((resolve) => (reached = resolve));
+    // A model call that is in flight when the process is told to stop, and ends the way a closed connection does.
+    const slow = { generate: () => new Promise<never>((_, reject) => { reached(); setTimeout(() => reject(new Error("connection closed")), 150); }) };
+    const stopping = createJobRunner(api.db, { llm: slow, fetcher: unreachable });
+    const jobId = await queued("redeployed");
+    stopping.enqueue(jobId);
+    await inFlight;
+
+    await stopping.release();
+    const handedBack = await api.db.jobs.findOne({ _id: jobId });
+    expect(handedBack).toMatchObject({ status: "queued", attempts: 0, active: true });
+    expect(handedBack).not.toHaveProperty("lease");
+
+    await api.runner.idle();
+    expect(await api.db.jobs.findOne({ _id: jobId })).toMatchObject({ status: "succeeded", attempts: 1 });
+  });
+
+  it("never lets two processes run the same job", async () => {
+    await api.signedIn();
+    const before = model.requests.length;
+    await queued("contested");
+
+    const processes = [anotherProcess(), anotherProcess(), anotherProcess()];
+    await Promise.all(processes.map((process) => process.idle()));
+
+    expect(await api.db.kits.countDocuments()).toBe(1);
+    expect(await api.db.jobs.findOne({ fingerprint: "contested" })).toMatchObject({ status: "succeeded", attempts: 1 });
+    expect(model.requests.slice(before).filter((request) => request.route === "extract")).toHaveLength(1);
+  });
+
+  it("removes the kit it just stored if the job changed hands in that instant", async () => {
+    await api.signedIn();
+    const jobId = await queued("changed-hands");
+
+    // The narrowest window there is: the job is taken over after this run's last ownership check, while its kit is being written.
+    const insertOne = api.db.kits.insertOne.bind(api.db.kits);
+    api.db.kits.insertOne = (async (...args: Parameters<typeof insertOne>) => {
+      const inserted = await insertOne(...args);
+      await api.db.jobs.updateOne({ _id: jobId }, { $set: { lease: { owner: "someone-else", expiresAt: new Date(Date.now() + 60_000) } } });
+      return inserted;
+    }) as typeof insertOne;
+
+    try {
+      const runner = anotherProcess();
+      runner.enqueue(jobId);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    } finally {
+      api.db.kits.insertOne = insertOne;
+    }
+
+    // The other process will make the job's kit. This one's must not be left beside it.
+    expect(await api.db.kits.countDocuments()).toBe(0);
+    expect(await api.db.jobs.findOne({ _id: jobId })).toMatchObject({ status: "running", lease: { owner: "someone-else" } });
+    await api.db.jobs.deleteMany({});
+  });
+
+  it("stops working and stores nothing when it finds its lease has been taken", async () => {
+    await api.signedIn();
+    const jobId = await queued("taken-over");
+
+    let takenOver = false;
+    const stalled: typeof model.llm = {
+      generate: async (request) => {
+        if (!takenOver) {
+          takenOver = true;
+          // Another process claims the job while this one is stuck; this one finds out at its next renewal.
+          await api.db.jobs.updateOne({ _id: jobId }, { $set: { lease: { owner: "someone-else", expiresAt: new Date(Date.now() + 60_000) } } });
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        return model.llm.generate(request);
+      },
+    };
+    const loser = createJobRunner(api.db, { llm: stalled, fetcher: unreachable }, { leaseMs: 150 });
+    loser.enqueue(jobId);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+
+    expect(await api.db.kits.countDocuments()).toBe(0);
+    expect(await api.db.jobs.findOne({ _id: jobId })).toMatchObject({ status: "running", lease: { owner: "someone-else" } });
+    await api.db.jobs.deleteMany({});
   });
 });
 

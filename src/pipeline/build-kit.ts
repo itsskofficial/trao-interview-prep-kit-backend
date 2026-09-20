@@ -95,11 +95,18 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
 
 async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: TraceRecorder): Promise<Kit> {
   const { fetcher, llm, embedder = lexicalEmbedder(), now = () => new Date(), onProgress = () => undefined } = deps;
+  // A run that has been given up on (a batch case past its budget, a job handed back on shutdown) stops at the next step.
+  // Without this it would carry on to the end: a failed model call only costs a step its section, by design, so an abandoned
+  // run would fetch every page and assemble a kit nobody is waiting for.
+  const begin = (step: PipelineStep) => {
+    deps.signal?.throwIfAborted();
+    onProgress({ step, status: "started" });
+  };
   const searchDiscussion = deps.searchDiscussion ?? createDiscussionSearch(fetcher);
   const notes: string[] = [];
 
   // 1. Extract. Pasted text needs no retrieval.
-  onProgress({ step: "extract", status: "started" });
+  begin("extract");
   const role = await extractRole(input.jd, llm).catch((error: unknown) => {
     onProgress({ step: "extract", status: "failed", detail: errorMessage(error) });
     if (error instanceof EmptyDescriptionError) throw new PipelineError("JD_EMPTY", error.message);
@@ -113,7 +120,7 @@ async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: Trac
   }
 
   // 2. Crawl the company site. A homepage is only useful once its links have been ranked and followed.
-  onProgress({ step: "crawl", status: "started" });
+  begin("crawl");
   // Whatever goes wrong while reading someone else's site costs the research, never the kit.
   const crawl = await crawlCompanySite(withScheme(input.companyUrl), fetcher, { pickLinks: createLinkPicker(llm), company: role.company }).catch(
     (error: unknown): SiteCrawl => ({
@@ -137,7 +144,7 @@ async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: Trac
 
   // 3. Public discussion of how this company interviews. Needs a company name, which may only be known after the crawl.
   const company = role.company || crawl.siteName;
-  onProgress({ step: "discussion", status: "started" });
+  begin("discussion");
   const discussion = await searchDiscussion(company).catch(
     (error: unknown): DiscussionResult => ({ snippets: [], log: [{ source: "public-discussion", outcome: "skipped", reason: `Search failed: ${errorMessage(error)}` }] }),
   );
@@ -148,7 +155,7 @@ async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: Trac
   });
 
   // 4. Brief and hiring stages, from what was retrieved and nothing else.
-  onProgress({ step: "brief", status: "started" });
+  begin("brief");
   const briefInput = { company, home: crawl.home, about: crawl.about, hiring: crawl.hiring, discussion: discussion.snippets, siteFailure: crawl.failure };
   const researched = await writeCompanyBrief(briefInput, llm, embedder).catch((error: unknown): BriefResult => {
     notes.push(`The company brief could not be written: ${errorMessage(error)}`);
@@ -173,7 +180,7 @@ async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: Trac
   onProgress({ step: "brief", status: "done", detail: `${researched.hiringStages.length} hiring stage(s) published` });
 
   // 5. Questions. Which calls are made, and with what instructions, depends on steps 1-4.
-  onProgress({ step: "questions", status: "started" });
+  begin("questions");
   const context: QuestionContext = { roleTitle: role.title, seniority: role.seniority };
   const nextQuestionId = idAllocator("q");
   const questions: Question[] = [];
@@ -204,7 +211,7 @@ async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: Trac
 
   // 6. Second pass. Code finds the requirements no question covers, the model is asked for
   //    those only, and code checks again. Must-haves still open get a question written by code.
-  onProgress({ step: "coverage", status: "started" });
+  begin("coverage");
   const coverage = await closeCoverageGaps(role.requirements, questions, (gaps) => generateForGaps(gaps, context, llm));
   questions.push(...coverage.added.map((draft) => ({ id: nextQuestionId(), ...draft })));
   const fallbacks = coverage.added.filter((q) => q.origin === "fallback").length;
@@ -218,7 +225,7 @@ async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: Trac
   });
 
   // 7. Flashcards.
-  onProgress({ step: "flashcards", status: "started" });
+  begin("flashcards");
   const nextFlashcardId = idAllocator("f");
   const companyFacts = companyKnown
     ? [`What they do: ${researched.brief.what_they_do}`, ...researched.hiringStages.map((stage, index) => `Hiring stage ${index + 1}: ${stage}`)]
@@ -232,7 +239,7 @@ async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: Trac
   onProgress({ step: "flashcards", status: "done", detail: `${flashcards.length} card(s)` });
 
   // 8. Schedule: arithmetic, never the model.
-  onProgress({ step: "schedule", status: "started" });
+  begin("schedule");
   const schedule = allocateSchedule({ days: input.days, questions, requirements: role.requirements });
   onProgress({ step: "schedule", status: "done" });
 
@@ -267,7 +274,7 @@ async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: Trac
   };
 
   // 9. Nothing leaves the pipeline without passing the structure check.
-  onProgress({ step: "validate", status: "started" });
+  begin("validate");
   const validation = validateKit(kit);
   if (!validation.ok) {
     onProgress({ step: "validate", status: "failed", detail: validation.issues.join("; ") });
