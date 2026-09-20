@@ -101,7 +101,7 @@ export function prioritySignals(description: string, evidence: string): Priority
  *   line, then any heading, then model        39/39 tuned   15/19 held out   <- what this used to be
  *   model only                                38/39         18/19
  *   line, then model                          39/39         18/19
- *   line, then an explicit heading, then model   see the script's output    <- what this is
+ *   line, then an explicit heading, then model 39/39         18/19           <- what this is
  *
  * 1. Wording about this one requirement ("required", "a plus") is explicit and wins.
  * 2. A heading that makes a claim ("Nice to have", "Bonus points", "Required qualifications", "Must-haves") is explicit too.
@@ -109,6 +109,9 @@ export function prioritySignals(description: string, evidence: string): Priority
  *    claim about each line in it: postings put "is appreciated" and "not a dealbreaker" under it all the time, and letting
  *    it overrule the model caused three of the old policy's four held-out mistakes. The model never once called a plain
  *    line under such a heading a bonus.
+ *
+ * The one held-out case still wrong ("Additional skills" read as must-have) is the model's own reading with no wording
+ * to correct it. It is left wrong on purpose: fixing it would mean tuning on the held-out set, which would stop it being one.
  *
  * Step 2 costs nothing on the measured sets and is a floor under a lazy model: one that calls everything a must-have (the
  * offline stand-in does) still gets a "Nice to have" section right.
