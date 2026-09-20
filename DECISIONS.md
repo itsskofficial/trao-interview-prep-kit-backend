@@ -1,6 +1,6 @@
 # Decisions
 
-A running log of the judgement calls in this project and why each was made. Newest at the bottom.
+The project's decision log (its ADRs, kept in one file so they can be read in order): each entry is the situation, the decision and the reason, written as the work happened. Newest at the bottom.
 
 ## 1. An unreachable company site is `ok`, not `failed`
 
@@ -173,3 +173,61 @@ Two reviewers that had not written the code read each repository against its REA
 - **The CLI** died on a byte-order mark, and wrote nothing until every case had finished.
 
 Others: the hourly allowance could be passed by parallel requests (it now writes the charge first and counts second), charged for regenerations it then refused, and did not charge retries; a forced brief regeneration overwrote text typed while it ran; Groq's free tier could not finish a case inside the default budget, and the README said otherwise. The review also confirmed what held: the SSRF guard against mapped, decimal and hex addresses; the versioned save; ownership scoping; and that the schedule and coverage invariants hold by construction.
+
+## 28. How the work was done: straight to main first, pull requests after the first deployment
+
+The base application was built directly on `main`, ticket by ticket, with CI running on every push. That was quick for one author with nobody to review, and it cost something once: a `.gitignore` rule that excluded `src/coverage/` reached `main` before CI flagged it, and because the host deploys from `main`, a broken `main` is a broken app. Once the app was deployed, every change went through a feature branch and a pull request, merged only with CI green and after an automated reviewer's comments had each been fixed or answered, so production was never disturbed by work in progress. Changes that alter what the pipeline produces were also scored with the live selfcheck before merging. The pull requests, reviews and replies are in the repository's history. The review found real faults in almost every one; the ones that mattered are named in the entries below.
+
+## 29. A trace of every run, kept in the application
+
+When a kit came out poor there was no way to see why. Every model call now reports the step, provider, attempt, whether it was a first answer or a repair, the outcome, time queued in the rate limiter, latency and the provider's own token counts; every fetch reports its address, outcome, duration and size; steps are timed. `buildKit` wraps the shared client and fetcher for the length of one run and hands over a `RunTrace`, on success and on failure. It is stored with the job and the kit, served by `GET /api/kits/:id/trace`, shown in the interface, and written per case by `npm run evaluate -- --trace <file>`. It holds no prompt, answer or page text, addresses lose their credentials, query and fragment, and error text has anything credential-shaped removed, so it is safe to store and to show. A hosted tracing service was not used because a clean clone has no account with one. The rate limiter also stopped guessing: a call is reserved at an estimate and settled with what the provider counted. Server logs are JSON lines with a request id (returned as `X-Request-Id` and in every error body) and a job id on every job line; secrets are censored at any depth.
+
+Review found that an observer that threw turned a good answer into a retried "network" failure, that totals were computed from a capped list, and that two batch workers could share one temporary output file. All fixed.
+
+## 30. Hiring stages must quote the page, like requirements quote the posting
+
+A stage used to be kept if half its words appeared anywhere on the hiring page. Common words could pass a stage the page never states, and a faithful paraphrase could be dropped. Now the model gives, for each stage and each interview insight, the words that state it, and code checks three things in order: the quote is in the source verbatim; if the claim is the source's own wording that is enough; otherwise the claim and its quote are compared by meaning. An insight is checked against the one comment its quote comes from, never against all of them joined, because a quote that only exists across the seam between two people's comments was said by nobody (review caught that). `kit.research_evidence` records the sentence each one rests on, the interface shows it, and rejected claims go to the run trace with the reason.
+
+## 31. Embeddings where the question is about meaning, measured rather than assumed
+
+Two checks are about meaning: whether two questions ask the same thing, and whether a quote supports a claim. Both use Gemini embeddings, whose free quota is separate from generation. They are an aid and never a dependency: offline, with no key, when the minute's budget is spent (it never waits) or on any failure, a lexical hashed n-gram embedder stands in, and callers are told which kind they got because the two are not on the same scale.
+
+Thresholds come from `npm run calibrate` over `fixtures/similarity.json`, whose negatives are deliberately hard. The measurement changed the design twice. Embeddings alone could not tell a paraphrase from a different question on the same subject (a memory leak in Node.js and one on the JVM both scored about 0.90), so a plain rule sits beside the score: two questions that each name a technology the other does not are different questions. With it, 0.90 made no mistake on the set and found 12 of 14 paraphrases. And sentences written to share a claim's words scored as high as real support, which is why the quote must be verbatim and cited per claim, with similarity as the third line of defence rather than the first. A reviewer suggested the model's documented task prefix; measured, it made separation worse for this job (the closest pair of different questions rose above the lowest paraphrase), so plain text is sent and `thresholds.ts` records both measurements.
+
+Duplicates are merged before the coverage check, and the kept question inherits the removed ones' requirements, so a merge cannot uncover anything. Never across categories. A regeneration drops drafts that repeat a question the user is keeping.
+
+## 32. A model picks links only when keyword ranking has failed
+
+Link ranking reads English hiring words, so "Inside Nimbus" or "Arbeiten bei uns" never earned a fetch. When the crawl ends without a hiring page, and only then, one model call sees the link texts and paths that were passed over and may name up to three. They are fetched and put to the same test as every other page: the page's own text decides. It costs nothing on the normal path, runs inside what is left of the crawl's deadline, and only addresses the crawl itself saw are fetched.
+
+## 33. An LLM judge for what has no right answer, checked before it is believed
+
+Everything with a right answer is checked by code. Whether a question is any good has none, so `npm run judge` scores a finished output against a written rubric with anchored 1-5 scales (relevance, specificity, difficulty fit and outline for questions; correctness and clarity for flashcards), reason before score. It is an offline tool and never part of the pipeline: no kit content is accepted or rejected on a model's opinion. The judge is the other provider whenever there is a key for it, so a model does not mark its own work. Deliberately bad items are mixed in under opaque labels, and each is checked on the one dimension it was built to fail; a judge that lets one through is reported as unreliable and the run exits 2. The first live run showed why per-dimension matters: the judge rightly called a wrong flashcard clear, and averaging its scores blamed the judge for the check's own mistake.
+
+Last run over the five fixture kits, judged by Groq's gpt-oss-120b: 4.5 of 5 overall, difficulty fit lowest at 3.9. That led to one prompt change (what each difficulty level means, and a request for a mix). Re-measured, difficulty fit moved to 4.0, which is inside the run-to-run noise, so no quality gain is claimed; what did change is the mix, from 4 warm-up questions in 54 to 11 in 57. The judge cannot check facts about a company, since it never sees the pages.
+
+## 34. Priority by wording, measured; and the policy the numbers asked for
+
+Must or nice was "the line's wording, then the heading, then the model", on the theory that the model could not be trusted with it. That had never been measured. `fixtures/priority-cases.json` holds 42 awkward phrasings the rule was tuned on and 20 written afterwards that are never tuned against, and `npm run measure:priority` runs the real extraction prompt over them:
+
+| Policy | Tuned on | Held out |
+|---|---|---|
+| line, then any heading, then model (the old policy) | 39/40 | 15/19 |
+| model only | 38/40 | 18/19 |
+| line, then an explicit heading, then model (adopted) | 39/40 | 18/19 |
+
+Three of the old policy's four held-out mistakes had one cause: a heading like "Requirements" is a container, postings put "is appreciated" and "not a dealbreaker" under it, and it was overruling a model that had read the line correctly. Headings that make a claim ("Nice to have", "Required qualifications") still win; container headings defer to the model. An offline test asserts the property that matters: on both sets the rule never overrules the model wrongly. The one remaining held-out miss is the model's own and is left alone, because fixing it would mean tuning on the held-out set. A case the model does not extract counts against every policy, so the scores are not flattered by dropping hard cases (review caught the first version doing that).
+
+## 35. The jobs collection is the queue
+
+Jobs lived in one process, and a restart marked whatever was running as interrupted. On a host that redeploys on every merge, that is a failure the user sees for something that was not their doing. Now a job is claimed with one atomic update that sets a lease; the lease is renewed while the job runs; a process that dies stops renewing, and once the lease lapses another process runs the job again, twice at most. A process told to stop hands its jobs back at once with the attempt refunded. A process that finds its lease taken stops and stores nothing, and a kit stored by a run that lost the job in that very instant is removed, so a job can never produce two kits. No new service: MongoDB was already there. A run that has been given up on now also stops at its next step instead of fetching every page and assembling a kit nobody is waiting for.
+
+Review caught the deployment case: a job mid-run when this version was deployed had no lease to lapse, and would have sat in "running" for ever, holding a slot and blocking resubmission. `start()` puts such jobs back in the queue.
+
+## 36. Reading what a client-rendered page ships, without a browser
+
+A headless browser is still ruled out (decision 14). But most pages that render in the browser carry their content in the HTML anyway. When a page's visible text is thin, its text is read from noscript fallbacks, hydration state (`__NEXT_DATA__` and other `application/json` scripts), JSON-LD, then the description. Only words a person would read are kept, while short list items survive, because on a hiring page the stages are exactly the short lines. Rich text stored as HTML goes through the same cleaning as a page, a lone comment included, so instructions hidden inside it are stripped. It is never mixed into a page that has real text, and the research log says when a page was read this way. This reduces the limitation rather than removing it: a page that fetches its content after loading still yields nothing, and says so.
+
+## 37. Free, first-party checks in CI
+
+CodeQL with the extended security queries runs on every pull request and weekly. Dependabot opens grouped weekly updates for npm and for the workflows. CI fails on a high-severity vulnerability in what is deployed, and on coverage falling below a floor set just under where it was first measured (91% of statements, 82% of branches, entry points excluded). The floor exists so coverage can only be lowered on purpose; it is not a target.
