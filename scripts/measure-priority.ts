@@ -7,6 +7,9 @@
  * model's own label for the quoted requirement, and scores several ways of combining it with the rule's two
  * signals (the line's own wording, and the heading above it). The policy in src/extraction/priority.ts was
  * chosen from this output; the numbers are recorded there.
+ *
+ * Exits 1 if the policy in use scores below its floor on either set. A case whose requirement the model did not
+ * extract on its own counts against the score: a measurement that quietly drops its hard cases is not one.
  */
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
@@ -28,6 +31,39 @@ interface Case {
 
 const Proposed = z.object({ requirements: z.array(z.object({ text: z.string(), evidence: z.string(), priority: z.enum(["must", "nice"]) })) });
 
+const IN_USE = "line, then an explicit heading, then model (in use)";
+/** What the policy in use scored when it was adopted, less one case of slack for the model having an off day. */
+const FLOOR: Record<string, number> = { cases: 38, heldOut: 17 };
+
+/**
+ * Which proposed requirement answers which case. Exact evidence first. Otherwise a requirement whose evidence
+ * contains the case's, but only if no other case of the same posting wants it too: a model that returned
+ * "Strong Python; Airflow a bonus" as one requirement has given one label to two cases, and that label is
+ * neither's. Each requirement answers at most one case.
+ */
+function assign(cases: Case[], proposed: Array<{ evidence: string; priority: Priority }>): Map<Case, Priority> {
+  const assigned = new Map<Case, Priority>();
+  const used = new Set<number>();
+  const normalised = proposed.map((requirement) => normalise(requirement.evidence));
+  for (const entry of cases) {
+    const index = normalised.findIndex((evidence, i) => !used.has(i) && evidence === normalise(entry.evidence));
+    if (index !== -1) {
+      used.add(index);
+      assigned.set(entry, proposed[index]!.priority);
+    }
+  }
+  for (const entry of cases.filter((candidate) => !assigned.has(candidate))) {
+    const needle = normalise(entry.evidence);
+    const index = normalised.findIndex((evidence, i) => !used.has(i) && (evidence.includes(needle) || needle.includes(evidence)));
+    if (index === -1) continue;
+    const contested = cases.some((other) => other !== entry && !assigned.has(other) && normalised[index]!.includes(normalise(other.evidence)));
+    if (contested) continue;
+    used.add(index);
+    assigned.set(entry, proposed[index]!.priority);
+  }
+  return assigned;
+}
+
 /** Ways of combining the rule's signals with the model's label. */
 export const POLICIES: Record<string, (signals: PrioritySignals, model: Priority) => Priority> = {
   "rule first (line, then heading, then model)": ({ line, heading }, model) => line ?? heading ?? model,
@@ -45,6 +81,7 @@ async function main(): Promise<void> {
   const sets: Array<[string, Case[]]> = values.set === "heldOut" ? [["heldOut", file.heldOut]] : values.set === "cases" ? [["cases", file.cases]] : [["cases", file.cases], ["heldOut", file.heldOut]];
 
   const labels = new Map<string, Array<{ evidence: string; priority: Priority }>>();
+  let belowFloor = false;
   for (const [name, cases] of sets) {
     const decided = cases.filter((entry) => entry.expected !== "defer");
     const rows: Array<{ entry: Case; model?: Priority; signals: PrioritySignals }> = [];
@@ -53,19 +90,28 @@ async function main(): Promise<void> {
         const answer = await llm.generate({ step: "measure-priority", system: SYSTEM, prompt: `Extract the role and its requirements.\n\n${wrapUntrusted("job_description", entry.jd)}`, schema: Proposed });
         labels.set(entry.jd, answer.requirements);
       }
-      const needle = normalise(entry.evidence);
-      const found = labels.get(entry.jd)!.find((requirement) => normalise(requirement.evidence).includes(needle) || needle.includes(normalise(requirement.evidence)));
-      rows.push({ entry, model: found?.priority, signals: prioritySignals(entry.jd, entry.evidence) });
+    }
+    for (const jd of new Set(decided.map((entry) => entry.jd))) {
+      const sameposting = decided.filter((entry) => entry.jd === jd);
+      const assigned = assign(sameposting, labels.get(jd)!);
+      for (const entry of sameposting) rows.push({ entry, model: assigned.get(entry), signals: prioritySignals(entry.jd, entry.evidence) });
     }
 
-    const extracted = rows.filter((row) => row.model !== undefined);
-    console.log(`\n== ${name}: ${decided.length} cases with a right answer, the model extracted the requirement in ${extracted.length}`);
+    const missing = rows.filter((row) => row.model === undefined);
+    console.log(`\n== ${name}: ${decided.length} cases with a right answer${missing.length > 0 ? `; the model did not extract ${missing.length} on their own: ${missing.map((row) => row.entry.note).join(", ")}` : ""}`);
     for (const [policy, decide] of Object.entries(POLICIES)) {
-      const wrong = extracted.filter((row) => decide(row.signals, row.model!) !== row.entry.expected);
-      console.log(`  ${String(extracted.length - wrong.length).padStart(2)}/${extracted.length}  ${policy}`);
-      for (const row of wrong) console.log(`         wrong: ${row.entry.note} (expected ${row.entry.expected}; line ${row.signals.line ?? "-"}, heading ${row.signals.heading ?? "-"}, model ${row.model})`);
+      // Not extracted counts as wrong, for every policy alike.
+      const wrong = rows.filter((row) => row.model === undefined || decide(row.signals, row.model) !== row.entry.expected);
+      const right = rows.length - wrong.length;
+      console.log(`  ${String(right).padStart(2)}/${rows.length}  ${policy}`);
+      for (const row of wrong.filter((candidate) => candidate.model !== undefined)) console.log(`         wrong: ${row.entry.note} (expected ${row.entry.expected}; line ${row.signals.line ?? "-"}, heading ${row.signals.heading ?? "-"}, model ${row.model})`);
+      if (policy === IN_USE && right < (FLOOR[name] ?? 0)) {
+        belowFloor = true;
+        console.log(`         BELOW THE FLOOR of ${FLOOR[name]} for this set`);
+      }
     }
   }
+  if (belowFloor) process.exit(1);
 }
 
 main().catch((error) => {

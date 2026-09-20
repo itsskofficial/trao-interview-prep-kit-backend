@@ -92,6 +92,15 @@ describe("priority when the wording is mixed or unusual", () => {
     expect(decidePriority(under(heading, "Elixir"), "Elixir", expected === "must" ? "nice" : "must")).toBe(expected);
   });
 
+  it("does not read 'you don't need to' as a requirement", () => {
+    const heading = "You don't need to tick every box";
+    expect(prioritySignals(under(heading, "Elixir"), "Elixir").heading).toBeUndefined();
+    const line = "You do not need to have used Rust before";
+    expect(prioritySignals(under("Requirements", line), line).line).toBeUndefined();
+    // Still a requirement when it is one.
+    expect(prioritySignals(under("Requirements", "You need to be able to work UK hours"), "You need to be able to work UK hours").line).toBe("must");
+  });
+
   // Measured: postings put "is appreciated" and "not a dealbreaker" under these, and the model reads the line; the heading does not.
   it.each(["Requirements", "What we're looking for", "About you", "Qualifications"])("treats the heading %j as a container, and lets the model's reading of the line stand", (heading) => {
     const line = "Prior startup experience is appreciated";

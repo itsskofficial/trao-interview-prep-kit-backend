@@ -13,7 +13,8 @@ const NICE = [
 ];
 
 /** Strong enough to trust on a single line, even under a "nice to have" heading. */
-const MUST_ON_LINE = [/\brequired\b/, /\bmust\b/, /\bessential\b/, /\bmandatory\b/, /\bminimum\b/, /\bneed to\b/, /\byou need\b/, /\byou('ll| will) need\b/, /\bneeds to\b/, /\bnon-?negotiables?\b/, /\bmust[- ]haves?\b/];
+const MUST_ON_LINE = [/\brequired\b/, /\bmust\b/, /\bessential\b/, /\bmandatory\b/, /\bminimum\b/, // "You don't need to tick every box" is the opposite of a requirement.
+  /(?<!n't |not |never |no )\bneed to\b/, /(?<!n't |not |never )\byou need\b/, /\byou('ll| will) need\b/, /\bneeds to\b/, /\bnon-?negotiables?\b/, /\bmust[- ]haves?\b/];
 
 /** Section headings that introduce must-haves. Too loose to apply to an individual line. */
 const MUST_IN_HEADING = [
@@ -98,10 +99,13 @@ export function prioritySignals(description: string, evidence: string): Priority
  * gemini-3.5-flash-lite) over fixtures/priority-cases.json, whose held-out half was written after tuning and is
  * never tuned against:
  *
- *   line, then any heading, then model        39/39 tuned   15/19 held out   <- what this used to be
- *   model only                                38/39         18/19
- *   line, then model                          39/39         18/19
- *   line, then an explicit heading, then model 39/39         18/19           <- what this is
+ *   line, then any heading, then model        39/40 tuned   15/19 held out   <- what this used to be
+ *   model only                                38/40         18/19
+ *   line, then model                          39/40         18/19
+ *   line, then an explicit heading, then model 39/40         18/19           <- what this is
+ *
+ * A case the model does not extract counts against every policy alike. The one tuned case lost that way is "A degree is
+ * not required", which the model, reasonably, does not report as a requirement at all.
  *
  * 1. Wording about this one requirement ("required", "a plus") is explicit and wins.
  * 2. A heading that makes a claim ("Nice to have", "Bonus points", "Required qualifications", "Must-haves") is explicit too.
