@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { ObjectId } from "mongodb";
 import type { CaseError } from "../batch/schema";
+import { silentLogger, type Logger } from "../logging/logger";
 import { kitRepository } from "../persistence/kits";
 import type { Database, JobDoc } from "../persistence/mongo";
 import { buildKit, type PipelineDeps, type PipelineInput, type ProgressEvent } from "../pipeline/build-kit";
@@ -29,7 +30,7 @@ export interface JobRunner {
  * and everything the job does is written to its document, where the interface
  * polls for it. The job calls the same `buildKit` as the batch command.
  */
-export function createJobRunner(db: Database, pipeline: PipelineDeps, concurrency = 2): JobRunner {
+export function createJobRunner(db: Database, pipeline: PipelineDeps, concurrency = 2, logger: Logger = silentLogger): JobRunner {
   const kits = kitRepository(db);
   const waiting: ObjectId[] = [];
   const running = new Set<Promise<void>>();
@@ -52,11 +53,15 @@ export function createJobRunner(db: Database, pipeline: PipelineDeps, concurrenc
     );
     if (!job) return; // already picked up, or cancelled
 
+    const log = logger.child({ jobId: jobId.toHexString(), userId: job.userId.toHexString() });
+    log.info({ days: job.input.days, waiting: waiting.length }, "job started");
     const input: PipelineInput = job.input;
     // Progress writes are chained so steps are stored in the order they happened; independent writes can overtake each other.
     let progress: Promise<unknown> = Promise.resolve();
     const recordStep = (event: ProgressEvent) => {
       const step = { ...event, at: new Date() };
+      if (event.status === "failed") log.warn({ step: event.step, detail: event.detail }, "step failed");
+      else log.debug({ step: event.step, status: event.status, detail: event.detail }, "step");
       progress = progress
         .then(() => db.jobs.updateOne({ _id: jobId }, { $push: { steps: step }, $set: { updatedAt: step.at } }))
         .catch(() => undefined); // losing a progress line must not fail the job
@@ -72,9 +77,14 @@ export function createJobRunner(db: Database, pipeline: PipelineDeps, concurrenc
       await progress;
       const stored = await kits.create(job.userId, kit, job.fingerprint, trace);
       await finish(jobId, { status: "succeeded", kitId: new ObjectId(stored.id), trace });
+      log.info({ kitId: stored.id, ms: trace?.durationMs, ...trace?.totals }, "job succeeded");
     } catch (error) {
       await progress;
-      await finish(jobId, { status: "failed", error: toCaseError(error), trace });
+      const failure = toCaseError(error);
+      await finish(jobId, { status: "failed", error: failure, trace });
+      // A pipeline error is an expected way to fail and is already described; anything else is a bug and gets its stack.
+      if (error instanceof PipelineError) log.warn({ code: failure.code, reason: failure.message, ms: trace?.durationMs, ...trace?.totals }, "job failed");
+      else log.error({ err: error, ms: trace?.durationMs }, "job crashed");
     }
   }
 
@@ -111,6 +121,5 @@ export function createJobRunner(db: Database, pipeline: PipelineDeps, concurrenc
 
 function toCaseError(error: unknown): CaseError {
   if (error instanceof PipelineError) return { code: error.code, message: error.message };
-  console.error(error);
   return { code: "INTERNAL", message: "Something went wrong while generating this kit." };
 }

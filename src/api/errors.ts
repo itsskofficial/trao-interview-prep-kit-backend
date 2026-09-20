@@ -1,9 +1,10 @@
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import { ZodError, type z } from "zod";
+import type { Logger } from "../logging/logger";
 
 /** Every error the API returns has this shape, so the interface can show something useful. */
 export interface ErrorBody {
-  error: { code: string; message: string; details?: unknown };
+  error: { code: string; message: string; details?: unknown; requestId?: string };
 }
 
 export class ApiError extends Error {
@@ -38,7 +39,7 @@ export const notFoundHandler: RequestHandler = (request, _response, next) => {
   next(new ApiError(404, "NOT_FOUND", `No route for ${request.method} ${request.path}.`));
 };
 
-export const errorHandler: ErrorRequestHandler = (error, _request, response, _next) => {
+export const errorHandler = (logger: Logger): ErrorRequestHandler => (error, request, response, _next) => {
   if (error instanceof ApiError) {
     const body: ErrorBody = { error: { code: error.code, message: error.message, ...(error.details !== undefined ? { details: error.details } : {}) } };
     return void response.status(error.status).json(body);
@@ -50,6 +51,8 @@ export const errorHandler: ErrorRequestHandler = (error, _request, response, _ne
     return void response.status(status).json({ error: { code, message: status === 413 ? "The request body is too large." : "The request body is not valid JSON." } });
   }
 
-  console.error(error);
-  response.status(500).json({ error: { code: "INTERNAL", message: "Something went wrong on our side." } });
+  // The one case worth a stack trace. The id ties this line to the request line, and to what the user was shown.
+  const requestId = response.locals.requestId as string | undefined;
+  logger.error({ requestId, method: request.method, path: request.originalUrl.split("?")[0], err: error }, "unhandled error");
+  response.status(500).json({ error: { code: "INTERNAL", message: "Something went wrong on our side.", ...(requestId ? { requestId } : {}) } });
 };
