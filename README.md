@@ -1,12 +1,13 @@
 # AI Interview Prep Kit - backend
 
-[![CI](https://github.com/itsskofficial/trao-interview-prep-kit-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/itsskofficial/trao-interview-prep-kit-backend/actions/workflows/ci.yml)
+[![CI](https://github.com/itsskofficial/trao-interview-prep-kit-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/itsskofficial/trao-interview-prep-kit-backend/actions/workflows/ci.yml) [![CodeQL](https://github.com/itsskofficial/trao-interview-prep-kit-backend/actions/workflows/codeql.yml/badge.svg)](https://github.com/itsskofficial/trao-interview-prep-kit-backend/actions/workflows/codeql.yml)
 
 Turns a job description, a company website and a number of days into a structured interview preparation kit: a company brief, a role breakdown, a categorised question bank, flashcards and a day-by-day schedule. This repository holds the research and generation pipeline, the HTTP API and the batch command. The interface is in [trao-interview-prep-kit-frontend](https://github.com/itsskofficial/trao-interview-prep-kit-frontend).
 
 - **Live app:** https://trao-interview-prep-kit.vercel.app
 - **Live API:** https://trao-interview-prep-kit-backend.onrender.com (`/api/health`)
-- **Why each decision was made:** [DECISIONS.md](DECISIONS.md), 27 short entries. This README summarises them.
+- **Why each decision was made:** [DECISIONS.md](DECISIONS.md), the decision log (37 short ADR-style entries, written as the work happened). This README summarises them.
+- **How it was built:** the base application went straight to `main`; everything after the first deployment went through pull requests, merged with CI green and review comments answered ([decision 28](DECISIONS.md)). The pull request history is part of the record.
 
 ## Contents
 
@@ -23,7 +24,8 @@ Turns a job description, a company website and a number of days into a structure
 11. [Security](#11-security)
 12. [Creative feature](#12-creative-feature-weak-spots-then-re-plan)
 13. [Testing](#13-testing)
-14. [Trade-offs and known limitations](#14-trade-offs-and-known-limitations)
+14. [Evaluation and observability](#14-evaluation-and-observability)
+15. [Trade-offs and known limitations](#15-trade-offs-and-known-limitations)
 
 ## 1. Batch entry point
 
@@ -41,6 +43,7 @@ npm run evaluate -- --input <cases.json> --output <kits.json>
 - Company sites on a local address work, on any port and under any path; relative links are resolved against the page they were found on.
 - Five cases take about 2 minutes 20 seconds on the free tier (measured; the ceiling is the provider's requests per minute, see [decision 19](DECISIONS.md)). Each case also has a 170-second budget and is recorded as `TIMEOUT` if it overruns, so one hung site cannot cost the fifteen minutes; a case that is given up on stops making model calls, so it cannot starve the cases after it. The crawl has its own 45-second deadline and counts failed fetches against its page budget.
 - `GROQ_API_KEY` is optional. When set, Groq takes over if Gemini's daily quota runs out. `LLM_PROVIDER=groq` makes Groq the primary and the command works, but be aware of what its free tier allows: 8K tokens a minute means a kit takes several minutes there (each case gets ten minutes instead of 170 seconds), so **five cases inside fifteen minutes needs the Gemini key**.
+- `--trace <file>` also writes what each run did: every step with its duration, every model call with its provider, latency and token counts, every fetch. The graded output file is unchanged by it. A one-line cost summary is printed either way.
 - The cases file may start with a byte-order mark, ids may be numbers, `days` may be a numeric string, and a company address may be typed without `http://`. The output file is rewritten after every case, so a run stopped early still leaves what it finished.
 
 Try it against the bundled fixture companies:
@@ -93,28 +96,38 @@ src/
   batch/        Appendix B shapes and the batch runner
   cli/          npm run evaluate
   llm/          provider-agnostic client: limiter, retry, failover, JSON repair; Gemini, Groq, offline
-  extraction/   requirements from the posting, verified against it
-  retrieval/    URL guard, fetcher, HTML cleaning, link ranking, crawl, public discussion
+  extraction/   requirements from the posting, verified against it; must or nice from its wording
+  retrieval/    URL guard, fetcher, HTML cleaning, link ranking, crawl, link picker, public discussion
+  similarity/   embeddings with a lexical fallback; duplicate questions; whether a quote supports a claim
   generation/   company brief, the plan of question calls, questions, flashcards
   coverage/     uncovered requirements, the gap-closing loop, the fallback question
   scheduling/   deterministic allocation across days
   pipeline/     buildKit: the one path from a description to a kit
+  trace/        what one run did: steps, model calls, fetches, decisions
+  evals/        the LLM judge (offline tool, never in the pipeline)
+  logging/      structured logs with request and job ids
   builder/      every user change as a pure function; the regeneration merge; the regenerator
   practice/     Leitner boxes, session ordering, weak spots
-  jobs/         in-process job runner
+  jobs/         the job runner: claim, lease, heartbeat, takeover
   persistence/  MongoDB collections and the kit repository
   api/          Express routes, auth, error shape
 ```
 
-Retrieval, extraction, generation, scheduling and persistence do not import each other; `pipeline/` is the only module that knows the order. The API and the batch command both call `buildKit`. The kit schema is defined once and validates model output, the assembled kit before it is saved or written, and the batch files. Extensions to Appendix A are additive and optional (`origin`, `edited`, `pinned`, `evidence`, `hiring_stages`, `interview_insights`, `research_log`, `notes`, `schedule.replan`), so a bare Appendix A kit still validates.
+Retrieval, extraction, generation, scheduling and persistence do not import each other; `pipeline/` is the only module that knows the order. The API and the batch command both call `buildKit`. The kit schema is defined once and validates model output, the assembled kit before it is saved or written, and the batch files. Extensions to Appendix A are additive and optional (`origin`, `edited`, `pinned`, `evidence`, `hiring_stages`, `interview_insights`, `research_evidence`, `research_log`, `notes`, `generator`, `schedule.replan`), so a bare Appendix A kit still validates.
 
-**Generation is a job, not a request.** Starting a kit returns `202` with a job at once; an in-process runner executes two at a time and writes each step to the job document, which the interface polls. Polling was chosen over server-sent events because it survives free-tier proxies, sleeping instances and a closed laptop lid. The same posting submitted twice returns the running job (enforced by a partial unique index, so two racing requests cannot both insert) or offers the existing kit. A failed job stores `{ code, message }` and can be retried. Jobs left running by a restart are marked interrupted and retryable on boot ([decision 21](DECISIONS.md)).
+**Generation is a job, not a request.** Starting a kit returns `202` with a job at once; the runner executes two at a time and writes each step to the job document, which the interface polls. Polling was chosen over server-sent events because it survives free-tier proxies, sleeping instances and a closed laptop lid. The same posting submitted twice returns the running job (enforced by a partial unique index, so two racing requests cannot both insert) or offers the existing kit. A failed job stores `{ code, message }` and can be retried ([decision 21](DECISIONS.md)).
+
+**The jobs collection is the queue, so a job outlives the process running it.** A job is claimed with one atomic update that sets a lease, and the lease is renewed while it runs. A process that dies stops renewing, and another process runs the job again once the lease lapses, twice at most. A process told to stop, which is every redeploy, hands its jobs back at once. A process that finds its lease taken stops and stores nothing, and removes a kit it stored in the very instant it lost the job, so a job does not leave two kits behind. It needs no new service and works with more than one instance ([decision 35](DECISIONS.md)).
 
 ## 5. Retrieval approach and sources
 
 **Sources used:** the company's own site (the URL given, and same-origin pages found by crawling it, plus `sitemap.xml` beside it when present); **Hacker News** through the Algolia search API; **Stack Exchange Workplace** through the Stack Exchange API. Both APIs are official, keyless and open to programmatic use. **Reddit and Glassdoor were left out**: most interview discussion lives there, but their robots.txt and terms forbid unauthenticated automated access.
 
 **Finding the hiring page.** No path is assumed. When the company's address is a folder on a shared origin (`http://host/acme/`), its site is that folder and nothing beside it, so another company's hiring page on the same host cannot be picked up. Every in-scope link is scored in code from its anchor text (what the company chose to call the page), the words in its path, where it sits (navigation and footers get a point) and its depth. Interviewing and hiring words score highest, careers and jobs next, then handbook, people, culture and engineering pages, which are rarely the answer but often one click from it. The crawler always fetches the best-scoring unvisited link next, to depth two, within twelve pages. A link called "Careers" proves nothing, so a page counts as the hiring page only if **its own text** describes a process: at least three process terms, matched as whole words, and one unambiguous anchor such as "interview". "Round" and "stage" only count beside an ordinal, and "offer" only in "make an offer", because a careers page that says "we offer competitive pay to engineers around the world" has not described a process. Links found on such a page inherit part of its score, which is how a vaguely named "What to expect" page two clicks down gets fetched.
+
+**When keyword ranking finds nothing.** Ranking reads English hiring words, so "Inside Nimbus" or "Arbeiten bei uns" never earns a fetch. If the crawl ends without a hiring page, and only then, one model call is shown the link texts and paths that were passed over and may name up to three. They are fetched and put to the same test as every other page, so the model proposes and the page's own text still decides. It costs nothing on the normal path and runs inside what is left of the crawl's deadline ([decision 32](DECISIONS.md)).
+
+**Pages that need JavaScript.** There is no headless browser ([decision 14](DECISIONS.md)). But most client-rendered pages carry their content in the HTML anyway, so when a page's visible text is thin it is read from noscript fallbacks, hydration state such as `__NEXT_DATA__`, JSON-LD and the description. Embedded rich text is cleaned like a page, hidden instructions included, and the research log says when a page was read this way ([decision 36](DECISIONS.md)).
 
 **robots.txt and politeness.** robots.txt is read once per origin and obeyed; requests to one host are serialised one second apart; 429, 5xx, timeouts and network errors retry twice with backoff honouring `Retry-After`. A source that cannot be retrieved is skipped and recorded with its reason in the kit's `research_log`; it never fails the run.
 
@@ -126,12 +139,12 @@ Each step uses what the previous ones actually found. Steps marked **code** invo
 
 | # | Step | Responsible for |
 |---|------|-----------------|
-| 1 | **Extract** | Title, seniority, location, responsibilities and requirements from the pasted posting. No retrieval. The model returns each requirement with a verbatim `evidence` quote; **code** drops any requirement whose quote is not in the posting, replaces a restatement that drifted from its evidence with the posting's own words, decides `must` or `nice` from the wording (the evidence, then its sentence, then the heading above it), and assigns ids in posting order. |
-| 2 | **Crawl** (code) | Homepage, ranked links, the hiring page if one exists. |
+| 1 | **Extract** | Title, seniority, location, responsibilities and requirements from the pasted posting. No retrieval. The model returns each requirement with a verbatim `evidence` quote; **code** drops any requirement whose quote is not in the posting, replaces a restatement that drifted from its evidence with the posting's own words, decides `must` or `nice` (explicit wording on the line wins, then a heading that makes a claim such as "Nice to have"; otherwise the model's reading stands, a policy chosen by measurement, see section 14), and assigns ids in posting order. |
+| 2 | **Crawl** (code, with one optional model call) | Homepage, ranked links, the hiring page if one exists. Only if none was found is a model asked which of the links passed over to try; code still decides whether what comes back is a hiring page. |
 | 3 | **Public discussion** | Needs a company name, which often only becomes known from the crawl, so it runs after it. A hit is kept only if it names the company and talks about interviewing. |
-| 4 | **Brief** | One call over the cleaned pages and discussion: summary, what they do, hiring stages, interview insights. Code keeps a stage or insight only if it is traceable to the text it claims to come from. With nothing retrieved the model is **not asked**: code writes a brief that says so. |
+| 4 | **Brief** | One call over the cleaned pages and discussion: summary, what they do, hiring stages, interview insights. The model must quote the page for each stage and the discussion for each insight; code keeps one only if the quote is there verbatim and says what is claimed, and records the sentence in `research_evidence`. With nothing retrieved the model is **not asked**: code writes a brief that says so. |
 | 5 | **Plan the question calls** (code) | A pure function from (requirements, seniority, published stages, brief) to a list of calls. |
-| 6 | **Questions** | One call per planned category, each with its own instructions and only its own requirements. |
+| 6 | **Questions** | One call per planned category, each with its own instructions and only its own requirements. Code then merges questions that ask the same thing (by meaning, within a category), the kept one inheriting the others' requirements, before coverage is checked. |
 | 7 | **Coverage loop** | Code finds the gaps; the model is asked for those only; code checks again. |
 | 8 | **Flashcards** | One call, tied to requirement ids. |
 | 9 | **Schedule** (code) | Arithmetic. |
@@ -144,7 +157,7 @@ The sequencing is genuine, and decided by code rather than a prompt:
 - **System design** is only asked for if the company publishes a design round, the posting asks for design experience, or the role is senior.
 - **Company fit** is only asked for if something about the company was actually retrieved. A dead URL means no company-fit call at all.
 
-A typical kit costs seven model calls. After extraction no step can fail the kit: a failed section leaves a note, and coverage is guaranteed by code either way.
+A typical kit costs seven model calls and two or three embedding calls, which come from a separate free quota. After extraction no step can fail the kit: a failed section leaves a note, and coverage is guaranteed by code either way.
 
 ## 7. The second pass
 
@@ -208,22 +221,59 @@ Two smaller additions: **undo for a regeneration**, because losing a generated q
 ## 13. Testing
 
 ```bash
-npm test                # 329 tests, no network, no live model
+npm test                # about 460 tests, no network, no live model
+npm run test:coverage   # the same, with a coverage floor (what CI runs)
 npm run typecheck
-npm run selfcheck       # live model, scored against the published rubric (about 40 requests)
+npm run selfcheck       # live model, scored against the published rubric (about 45 requests)
 ```
 
 - The behaviour the brief names is tested as pure functions: **schedule allocation** (exact day count for 1, 5, 12, 13 and 60 days; integer minutes; every question and every must-have scheduled; must-have and harder material first; revision days; zero questions; determinism), **coverage checking** (the loop, its stop rules, the fallback, "never leaves a must-have uncovered, whatever the model does") and **structure validation** (every Appendix A rule, including cross-references, reported all at once).
 - The **pipeline** is tested through its one entry point, with a model stub that answers by step rather than by call order and the fixture company sites served over real HTTP.
 - The **API** is tested over HTTP against an in-memory MongoDB: ownership isolation, deduplication under a race, per-item operations, concurrent edits, an edit racing a regeneration, undo.
 - `npm run selfcheck` runs the five fixture cases live and scores them against the brief's automated rubric, with the expected must-haves recorded per case so extraction is measured, not eyeballed. Last run: every extraction, research and robustness check passed.
+- The **job runner** is tested as several processes over one database: takeover of a dead process's job, a live lease left alone, the attempt cap, hand-back on stop, three processes racing for one job, a lease lost mid-run.
+- CI also runs **CodeQL**, `npm audit` on what is deployed, and fails if coverage drops below its floor (91% of statements and 82% of branches when set).
 - The interface's browser tests live in the frontend repository and run against this backend's offline mode.
 
-## 14. Trade-offs and known limitations
+## 14. Evaluation and observability
 
-- **No JavaScript rendering.** Pages that render only in a browser yield little text, and are logged as such. A hosted scraper was ruled out: it cannot reach a site served from the evaluator's localhost, and it would need a third API key.
-- **Jobs and regenerations live in one process.** A restart marks them interrupted and retryable. An external queue is the first thing to add with a second instance.
-- **Priority by wording is heuristic.** The phrase lists are in one file and tested, and the model's label is the last resort, but an unusual posting can still be read wrongly.
-- **Discussion search is name-based**, so a company with a common name mostly yields results that are filtered out. That is reported, not hidden.
+The rule for choosing a tool was the same throughout: **if the question has a right answer, code answers it; if it does not, a model may, and its answer is checked before it is believed.**
+
+| Question | Has a right answer? | Decided by |
+|---|---|---|
+| Is this requirement in the posting? Is this stage on the page? | Yes | Code: verbatim quote check |
+| Does every must-have have a question? Does the schedule span N days? | Yes | Code: set arithmetic and allocation (the brief requires it) |
+| Does the kit have the required structure? | Yes | Code: schema validation |
+| Must-have or nice-to-have? | Usually | Wording when it is explicit, otherwise the model, in an order chosen by measurement |
+| Do these two questions ask the same thing? Does this quote support this claim? | Partly | Embeddings with measured thresholds, plus a plain rule where embeddings were measured not to be enough |
+| Is this a good interview question? | No | An LLM judge, offline, never in the pipeline |
+
+Why there is no agent framework: the brief fixes the steps, so the intelligence goes inside each step and the control flow stays in ten readable lines of `buildKit`. An agent loop earns its keep when the next step is unknown; here it would cost several times the model calls on a 15-requests-a-minute free tier and make a graded pipeline less predictable.
+
+```bash
+npm run selfcheck                         # code-graded eval against the brief's rubric, live model
+npm run judge -- --from kits.json         # LLM-as-judge on question and flashcard quality
+npm run measure:priority                  # which should decide must/nice: the rule, the model, or which when
+npm run calibrate                         # similarity thresholds from labelled pairs
+npm run evaluate -- ... --trace trace.json
+```
+
+- **Selfcheck** runs the five fixture cases live and scores them against the brief's automated rubric. Last run: 104 of 104 checks. It is the repository's own checker over fixture companies written to mirror the brief's description of the hidden set. It is evidence, not the grade.
+- **The judge** scores a finished output against an anchored 1-5 rubric, reason before score. It is the other provider whenever there is a key for it, so a model does not mark its own work, and it is checked before it is believed: deliberately bad items are mixed in under opaque labels, each checked on the dimension it was built to fail, and a judge that lets one through is reported as unreliable. Last run, judged by Groq's gpt-oss-120b: 4.5 of 5 overall, difficulty fit lowest at 3.9. The prompt change that followed moved it to 4.0, which is inside the run-to-run noise, so no gain is claimed ([decision 33](DECISIONS.md)).
+- **Priority by wording** was measured against the live model on 42 phrasings it was tuned on and 20 held out (40 and 19 of them have a right answer to score; the rest are labelled as giving no signal). The old policy scored 15 of 19 held out; the adopted one scores 18 of 19, because a heading like "Requirements" no longer overrules a model that has read "is appreciated" correctly ([decision 34](DECISIONS.md)).
+- **Similarity thresholds** come from labelled pairs with deliberately hard negatives, and the measurements are recorded beside the numbers in `src/similarity/thresholds.ts` ([decision 31](DECISIONS.md)).
+- **Every run is traced.** Each model call records provider, attempt, outcome, time queued, latency and the provider's own token counts; each fetch its outcome and duration; each step its time. The trace is stored with the job and the kit, shown in the interface under "How this kit was made", and holds no prompt, answer or page text. It lives in the application because a clean clone has no account with a tracing service ([decision 29](DECISIONS.md)).
+- **Logs** are JSON lines with a request id (also returned as `X-Request-Id` and in every error body) and a job id on every job line. Secrets are censored at any depth.
+
+## 15. Trade-offs and known limitations
+
+Removed since the first version, each through a pull request: jobs now outlive the process running them; priority by wording is measured and its policy changed by what that showed; hiring stages quote their source; duplicate questions are merged by meaning. In the interface: unsaved edits survive a closed tab, there is a dark theme, flashcards drag, and a question can be dragged between categories.
+
+What remains:
+
+- **No browser rendering.** A page that fetches its content after loading yields nothing, and the log says so. Pages that ship their content in the HTML for their own scripts are read ([decision 36](DECISIONS.md)). A hosted scraper was ruled out: it cannot reach a site served from the evaluator's localhost, and it would need another key.
+- **Priority is still a judgement.** Measured at 18 of 19 on phrasings never tuned against; the remaining miss is the model's own reading of "Additional skills", left alone because fixing it would mean tuning on the held-out set.
+- **Discussion search is name-based** and limited to two keyless sources, so a small company, or one with a common name, mostly yields nothing usable. That is reported, not hidden. A general web search would find more and needs a key the evaluators will not have.
+- **The judge cannot check facts about a company**, since it never sees the pages. Those are guarded by the verbatim-quote rule instead.
 - **The free hosting tier sleeps.** A scheduled request keeps it awake, and the interface says "waking the server" if a request is slow.
 - **Not built, on purpose:** email verification, password reset, roles, anything in the brief's out-of-scope list.
