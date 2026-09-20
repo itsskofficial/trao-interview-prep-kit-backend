@@ -6,6 +6,7 @@ import { BatchInputSchema, type BatchOutput } from "../batch/schema";
 import { allowsPrivateUrls, caseTimeoutMs, loadConfig, loadEnvFile } from "../config";
 import { createLlmClientFromConfig } from "../llm";
 import { createPageFetcher } from "../retrieval/fetcher";
+import { createEmbedderFromConfig } from "../similarity";
 import type { RunTrace } from "../trace/trace";
 
 const USAGE = "Usage: npm run evaluate -- --input <cases.json> --output <kits.json> [--trace <trace.json>]";
@@ -55,6 +56,7 @@ async function main(): Promise<number> {
   const output = await runBatch(cases, {
     llm,
     fetcher,
+    embedder: createEmbedderFromConfig(config, (reason) => console.error(`  Embeddings unavailable (${reason}); compared lexically.`)),
     concurrency: config.BATCH_CONCURRENCY,
     caseTimeoutMs: caseTimeoutMs(config),
     log: (line) => console.error(line),

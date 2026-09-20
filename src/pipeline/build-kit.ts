@@ -12,6 +12,8 @@ import { crawlCompanySite, type CrawledPage, type SiteCrawl } from "../retrieval
 import { createDiscussionSearch, type DiscussionResult, type DiscussionSearch } from "../retrieval/discussion";
 import type { PageFetcher } from "../retrieval/fetcher";
 import { allocateSchedule } from "../scheduling/allocate";
+import { mergeDuplicateQuestions } from "../similarity/questions";
+import { lexicalEmbedder, type Embedder } from "../similarity/embedder";
 import { createTraceRecorder, tracedFetcher, type RunTrace, type TraceRecorder } from "../trace/trace";
 import { PipelineError } from "./errors";
 import { PIPELINE_VERSION, promptFingerprint } from "./generator";
@@ -33,6 +35,8 @@ export interface ProgressEvent {
 export interface PipelineDeps {
   llm: LlmClient;
   fetcher: PageFetcher;
+  /** Compares meaning: duplicate questions, and whether a quote supports a claim. Defaults to the lexical embedder, which needs no network. */
+  embedder?: Embedder;
   /** Defaults to the public sources in retrieval/discussion, reached through `fetcher`. */
   searchDiscussion?: DiscussionSearch;
   now?: () => Date;
@@ -89,7 +93,7 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
 }
 
 async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: TraceRecorder): Promise<Kit> {
-  const { fetcher, llm, now = () => new Date(), onProgress = () => undefined } = deps;
+  const { fetcher, llm, embedder = lexicalEmbedder(), now = () => new Date(), onProgress = () => undefined } = deps;
   const searchDiscussion = deps.searchDiscussion ?? createDiscussionSearch(fetcher);
   const notes: string[] = [];
 
@@ -145,14 +149,17 @@ async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: Trac
   // 4. Brief and hiring stages, from what was retrieved and nothing else.
   onProgress({ step: "brief", status: "started" });
   const briefInput = { company, home: crawl.home, about: crawl.about, hiring: crawl.hiring, discussion: discussion.snippets, siteFailure: crawl.failure };
-  const researched = await writeCompanyBrief(briefInput, llm).catch((error: unknown): BriefResult => {
+  const researched = await writeCompanyBrief(briefInput, llm, embedder).catch((error: unknown): BriefResult => {
     notes.push(`The company brief could not be written: ${errorMessage(error)}`);
     return {
       brief: { summary: "The company brief could not be generated. Regenerate this section to try again.", what_they_do: "", sources: [], origin: "generated" },
       hiringStages: [],
       interviewInsights: [],
+      evidence: [],
+      rejected: [],
     };
   });
+  for (const rejected of researched.rejected) trace.decision("brief", `Not kept: ${rejected}.`);
   const companyKnown = researched.brief.sources.length > 0;
   const discussionLog = [...discussion.log];
   if (discussion.snippets.length > 0 && researched.interviewInsights.length === 0) {
@@ -184,7 +191,15 @@ async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: Trac
     });
     questions.push(...drafts.map((draft) => ({ id: nextQuestionId(), ...draft })));
   }
-  onProgress({ step: "questions", status: "done", detail: `${questions.length} question(s) from ${plan.map((call) => call.category).join(", ") || "no calls"}` });
+  // Two calls, or one call on a bad day, can ask the same thing in different words. Merged before the coverage
+  // check, so that if a merge ever left a requirement without a question the second pass would see it.
+  const merged = await mergeDuplicateQuestions(questions, embedder).catch(() => undefined);
+  if (merged && merged.removed.length > 0) {
+    questions.splice(0, questions.length, ...merged.questions);
+    for (const pair of merged.removed) trace.decision("questions", `Merged a duplicate question into ${pair.into} (${merged.comparedWith}).`);
+  }
+  const mergedNote = merged && merged.removed.length > 0 ? `, ${merged.removed.length} duplicate(s) merged` : "";
+  onProgress({ step: "questions", status: "done", detail: `${questions.length} question(s) from ${plan.map((call) => call.category).join(", ") || "no calls"}${mergedNote}` });
 
   // 6. Second pass. Code finds the requirements no question covers, the model is asked for
   //    those only, and code checks again. Must-haves still open get a question written by code.
@@ -244,6 +259,7 @@ async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: Trac
     coverage: { uncovered_requirement_ids: coverage.uncovered.map((r) => r.id), passes: coverage.passes },
     hiring_stages: researched.hiringStages,
     interview_insights: researched.interviewInsights,
+    research_evidence: researched.evidence,
     research_log: [...crawl.log, ...discussionLog],
     notes,
     generator: { pipeline: PIPELINE_VERSION, prompts: promptFingerprint(), models: trace.models() },

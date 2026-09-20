@@ -8,6 +8,10 @@ const EnvSchema = z.object({
   LLM_PROVIDER: z.enum(["gemini", "groq", "offline"]).default("gemini"),
   GEMINI_API_KEY: z.string().default(""),
   GEMINI_MODEL: z.string().default("gemini-3.5-flash-lite"),
+  /** "off" turns semantic comparison off; the lexical embedder is used instead. */
+  GEMINI_EMBEDDING_MODEL: z.string().default("gemini-embedding-2"),
+  /** Texts a minute. Every text in a batch counts as a request against the free tier limit of 100. */
+  GEMINI_EMBEDDING_RPM: z.coerce.number().int().positive().default(80),
   // Defaults sit under the measured free-tier limits (15 requests/min, 250K tokens/min) to leave headroom.
   GEMINI_RPM: z.coerce.number().int().positive().default(12),
   GEMINI_TPM: z.coerce.number().int().positive().default(200_000),

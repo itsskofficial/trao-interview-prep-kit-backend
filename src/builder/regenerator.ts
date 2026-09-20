@@ -9,6 +9,8 @@ import type { KitDoc, RegenerationTarget } from "../persistence/mongo";
 import type { PipelineDeps } from "../pipeline/build-kit";
 import { crawlCompanySite } from "../retrieval/crawl";
 import { createDiscussionSearch } from "../retrieval/discussion";
+import { lexicalEmbedder } from "../similarity/embedder";
+import { withoutDuplicates } from "../similarity/questions";
 import { isProtected, reconcile } from "./operations";
 import { mergeRegeneratedQuestions, undoRegeneratedQuestions } from "./regenerate-merge";
 
@@ -40,6 +42,7 @@ export interface Regenerator {
  */
 export function createRegenerator(kits: KitRepository, pipeline: PipelineDeps): Regenerator {
   const inFlight = new Set<Promise<void>>();
+  const embedder = pipeline.embedder ?? lexicalEmbedder();
 
   async function regenerateQuestions(userId: ObjectId, kitId: string, category: QuestionCategory, kit: Kit): Promise<void> {
     const call = plannedCallFor(kit, category);
@@ -51,11 +54,15 @@ export function createRegenerator(kits: KitRepository, pipeline: PipelineDeps): 
         : "",
     ].filter(Boolean).join("\n\n");
 
-    const drafts = await generateQuestions(
+    const proposed = await generateQuestions(
       { category, requirements: call.requirements, guidance: guidance || undefined, context: { roleTitle: kit.role.title, seniority: kit.role.seniority } },
       pipeline.llm,
     );
-    if (drafts.length === 0) throw new Error("The model returned no usable questions, so the existing ones were kept.");
+    if (proposed.length === 0) throw new Error("The model returned no usable questions, so the existing ones were kept.");
+
+    // Told which questions are being kept, the model still sometimes writes one of them again in other words.
+    const { fresh: drafts } = await withoutDuplicates(keeping.map((question) => question.prompt), proposed, embedder).catch(() => ({ fresh: proposed }));
+    if (drafts.length === 0) throw new Error("The model only repeated questions you are keeping, so nothing was replaced.");
 
     await kits.mutate(userId, kitId, (doc) => {
       const merged = mergeRegeneratedQuestions({ kit: doc.kit, counters: doc.counters }, category, drafts);
@@ -76,6 +83,7 @@ export function createRegenerator(kits: KitRepository, pipeline: PipelineDeps): 
     const researched = await writeCompanyBrief(
       { company, home: crawl.home, about: crawl.about, hiring: crawl.hiring, discussion: discussion.snippets, siteFailure: crawl.failure },
       pipeline.llm,
+      embedder,
     );
 
     await kits.mutate(userId, kitId, (doc) => {
@@ -85,12 +93,13 @@ export function createRegenerator(kits: KitRepository, pipeline: PipelineDeps): 
         return { set: { regeneration: { section: "brief", status: "failed", startedAt: new Date(), error: "You edited the brief while it was being regenerated, so your version was kept." } } };
       }
       // Absent optional fields are stored as empty lists: MongoDB would turn `undefined` into `null`, which is not a valid kit.
-      const previous = { company_brief: doc.kit.company_brief, hiring_stages: doc.kit.hiring_stages ?? [], interview_insights: doc.kit.interview_insights ?? [] };
+      const previous = { company_brief: doc.kit.company_brief, hiring_stages: doc.kit.hiring_stages ?? [], interview_insights: doc.kit.interview_insights ?? [], research_evidence: doc.kit.research_evidence ?? [] };
       const next: Kit = {
         ...doc.kit,
         company_brief: researched.brief,
         hiring_stages: researched.hiringStages,
         interview_insights: researched.interviewInsights,
+        research_evidence: researched.evidence,
         source: { ...doc.kit.source, pages_used: [crawl.home, crawl.about, crawl.hiring].flatMap((page) => (page?.text ? [page.url] : [])), researched_at: (pipeline.now?.() ?? new Date()).toISOString() },
         research_log: [...crawl.log, ...discussion.log],
       };

@@ -15,7 +15,8 @@
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
     "selfcheck": "tsx scripts/selfcheck.ts",
-    "dev:offline": "tsx scripts/dev-offline.ts"
+    "dev:offline": "tsx scripts/dev-offline.ts",
+    "calibrate": "tsx scripts/calibrate-similarity.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

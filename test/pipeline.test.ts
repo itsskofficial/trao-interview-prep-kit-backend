@@ -7,6 +7,7 @@ import { ProviderError, type ProviderRequest } from "../src/llm/types";
 import { buildKit, type PipelineDeps, type ProgressEvent } from "../src/pipeline/build-kit";
 import type { DiscussionSearch } from "../src/retrieval/discussion";
 import { createPageFetcher, type PageFetcher } from "../src/retrieval/fetcher";
+import type { RunTrace } from "../src/trace/trace";
 import { routedModel } from "./support/model";
 
 const JD = `Senior Backend Engineer
@@ -36,8 +37,17 @@ const extraction = {
 const acmeBrief = {
   summary: "Acme Logistics builds route-planning software for courier companies.",
   what_they_do: "A route optimiser and dispatch tools.",
-  hiring_stages: ["Recruiter call", "Take-home exercise", "System design interview", "Values interview with the hiring manager", "Whiteboard puzzles with the CEO"],
-  interview_insights: ["They love brain teasers"],
+  hiring_stages: [
+    { stage: "Recruiter call", evidence: "Recruiter call (30 minutes)." },
+    { stage: "Take-home exercise", evidence: "Take-home exercise. A small routing problem." },
+    { stage: "System design interview", evidence: "System design interview (60 minutes)." },
+    { stage: "Values interview with the hiring manager", evidence: "Values interview with the hiring manager (45 minutes)." },
+    // Invented, and "quoted" from words that are nowhere on the page.
+    { stage: "Whiteboard puzzles with the CEO", evidence: "You will solve whiteboard puzzles with our CEO." },
+    // Invented, and pinned on a real sentence that says nothing of the kind.
+    { stage: "Whiteboard puzzles with the CEO, again", evidence: "We care about trade-offs, not a perfect diagram." },
+  ],
+  interview_insights: [{ insight: "They love brain teasers", evidence: "They love brain teasers" }],
 };
 
 const NOW = () => new Date("2026-09-19T12:00:00Z");
@@ -120,6 +130,22 @@ describe("buildKit", () => {
     expect(kit.interview_insights).toEqual([]);
   });
 
+  it("records the sentence each kept stage rests on, and traces what it threw away", async () => {
+    let trace: RunTrace | undefined;
+    const kit = await buildKit(caseFor("acme"), deps(routedModel({ extract: extraction, brief: acmeBrief }).llm, { onTrace: (t) => (trace = t) }));
+
+    expect(kit.research_evidence).toContainEqual({
+      claim: "Take-home exercise",
+      quote: "Take-home exercise. A small routing problem.",
+      source: "hiring-page",
+      url: expect.stringContaining("/acme/handbook/people/talent/stage-guide"),
+    });
+    expect(kit.research_evidence).toHaveLength(4);
+    const decisions = trace!.decisions.map((decision) => decision.what).join(" ");
+    expect(decisions).toContain('"Whiteboard puzzles with the CEO": the quoted words are not in the source');
+    expect(decisions).toContain('"Whiteboard puzzles with the CEO, again": the quoted words do not say this');
+  });
+
   it("discards requirement ids the model made up", async () => {
     const madeUp = { questions: [{ requirement_ids: ["r1", "r99"], prompt: "P", answer_outline: "O", difficulty: 3 }] };
     const kit = await buildKit(caseFor("acme"), deps(routedModel({ extract: extraction, technical: madeUp }).llm));
@@ -130,6 +156,40 @@ describe("buildKit", () => {
     const kit = await buildKit(caseFor("acme", 60), deps(routedModel({ extract: extraction }).llm));
     expect(kit.schedule.days_available).toBe(60);
     expect(kit.schedule.days).toHaveLength(60);
+  });
+});
+
+describe("buildKit duplicate questions", () => {
+  const twice = {
+    questions: [
+      { requirement_ids: ["r1"], prompt: "How would you debug a memory leak in a Node.js service?", answer_outline: "Heap snapshots", difficulty: 2 },
+      { requirement_ids: ["r2"], prompt: "How do PostgreSQL indexes work?", answer_outline: "B-trees", difficulty: 2 },
+      { requirement_ids: ["r4"], prompt: "How would you debug a memory leak in a Node.js service in production?", answer_outline: "Heap snapshots again", difficulty: 3 },
+    ],
+  };
+
+  it("merges a repeated question before the coverage check, keeping every requirement it covered", async () => {
+    let trace: RunTrace | undefined;
+    const events: ProgressEvent[] = [];
+    const model = routedModel({ extract: extraction, brief: acmeBrief, technical: twice });
+    const kit = await buildKit(caseFor("acme"), deps(model.llm, { onTrace: (t) => (trace = t), onProgress: (event) => events.push(event) }));
+
+    const leaks = kit.questions.filter((question) => question.prompt.includes("memory leak"));
+    expect(leaks).toHaveLength(1);
+    expect(leaks[0]).toMatchObject({ id: "q1", requirement_ids: ["r1", "r4"] });
+    // Nothing was uncovered by the merge, so the second pass had nothing to ask for.
+    expect(model.requestFor("gaps")).toBeUndefined();
+    expect(kit.coverage.uncovered_requirement_ids).toEqual([]);
+    expect(events.find((event) => event.step === "questions" && event.status === "done")!.detail).toContain("1 duplicate(s) merged");
+    expect(trace!.decisions.map((decision) => decision.what).join(" ")).toContain("Merged a duplicate question into q1");
+    expect(validateKit(kit)).toMatchObject({ ok: true });
+  });
+
+  it("carries on with every question when the comparison itself fails", async () => {
+    const model = routedModel({ extract: extraction, brief: acmeBrief, technical: twice });
+    const broken = { embed: async () => { throw new Error("embeddings down"); } };
+    const kit = await buildKit(caseFor("globex"), deps(model.llm, { embedder: broken }));
+    expect(kit.questions.filter((question) => question.prompt.includes("memory leak"))).toHaveLength(2);
   });
 });
 
@@ -149,7 +209,7 @@ describe("buildKit when there is little to work with", () => {
   });
 
   it("says so when the site has no hiring page, and reports no stages", async () => {
-    const model = routedModel({ extract: extraction, brief: { ...acmeBrief, hiring_stages: ["Take-home exercise"] } });
+    const model = routedModel({ extract: extraction, brief: { ...acmeBrief, hiring_stages: [{ stage: "Take-home exercise", evidence: "Take-home exercise." }] } });
     const kit = await buildKit(caseFor("globex"), deps(model.llm));
 
     expect(model.requestFor("brief")!.prompt).toContain("hiring_stages must be empty");
@@ -308,12 +368,14 @@ describe("buildKit public discussion", () => {
   });
 
   it("uses discussion that is about this company, and cites it", async () => {
-    const brief = { ...acmeBrief, interview_insights: ["The take-home was a routing problem and they paid for the time"] };
+    const insight = "The take-home was a routing problem and they paid for the time";
+    const brief = { ...acmeBrief, interview_insights: [{ insight, evidence: "the take-home was a routing problem and they paid for my time" }] };
     const model = routedModel({ extract: extraction, brief });
     const kit = await buildKit(caseFor("acme"), deps(model.llm, { searchDiscussion: found }));
 
     expect(model.requestFor("brief")!.prompt).toContain("<untrusted_public_discussion>");
-    expect(kit.interview_insights).toEqual(brief.interview_insights);
+    expect(kit.interview_insights).toEqual([insight]);
+    expect(kit.research_evidence).toContainEqual(expect.objectContaining({ claim: insight, source: "public-discussion", url: "https://news.ycombinator.com/item?id=1" }));
     expect(kit.company_brief.sources).toContain("https://news.ycombinator.com/item?id=1");
     expect(model.requestFor("company-fit")!.prompt).toContain("routing problem");
   });

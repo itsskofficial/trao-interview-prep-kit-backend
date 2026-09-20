@@ -1,17 +1,18 @@
 import { z } from "zod";
-import { wordOverlap } from "../extraction/evidence";
-import type { Kit } from "../kit/schema";
+import type { Kit, ResearchEvidence } from "../kit/schema";
 import type { LlmClient } from "../llm/types";
 import { UNTRUSTED_CONTENT_RULE, wrapUntrusted } from "../llm/untrusted";
 import { PROCESS_TERMS, STAGE_TERMS, type CrawledPage } from "../retrieval/crawl";
 import { processDigest } from "../retrieval/excerpt";
 import type { DiscussionSnippet } from "../retrieval/discussion";
+import { lexicalEmbedder, type Embedder } from "../similarity/embedder";
+import { checkSupport, type SupportResult } from "../similarity/support";
 
 const ProposedBriefSchema = z.object({
   summary: z.string(),
   what_they_do: z.string(),
-  hiring_stages: z.array(z.string()),
-  interview_insights: z.array(z.string()),
+  hiring_stages: z.array(z.object({ stage: z.string(), evidence: z.string() })),
+  interview_insights: z.array(z.object({ insight: z.string(), evidence: z.string() })),
 });
 
 export interface BriefInput {
@@ -30,6 +31,10 @@ export interface BriefResult {
   hiringStages: string[];
   /** What public discussion says about interviewing there. Empty when there is none. */
   interviewInsights: string[];
+  /** The words on the page or in the discussion that each kept stage and insight rests on. */
+  evidence: ResearchEvidence[];
+  /** What was proposed and not kept, and why. For the run trace. */
+  rejected: string[];
 }
 
 export const SYSTEM = `You write a short, factual company brief for someone preparing for an interview there.
@@ -38,8 +43,9 @@ Rules:
 - Use only what the supplied pages and discussion say. If they do not say something, leave it out. Never fill gaps from general knowledge.
 - "summary": two or three sentences on who the company is.
 - "what_they_do": the product or service and who it is for, in plain words.
-- "hiring_stages": the stages of the hiring process in order, each as a short phrase, ONLY if a supplied page describes them. Otherwise an empty list.
-- "interview_insights": what the public discussion says about interviewing at this company, ONLY if it is clearly about this company. Otherwise an empty list.
+- "hiring_stages": the stages of the hiring process in order, ONLY if a supplied page describes them. Otherwise an empty list. For each: "stage" is a short phrase naming it, and "evidence" is the sentence or phrase from the hiring page that states it, copied exactly, word for word.
+- "interview_insights": what the public discussion says about interviewing at this company, ONLY if it is clearly about this company. Otherwise an empty list. For each: "insight" in your words, and "evidence" copied exactly from the discussion.
+- A stage or insight whose evidence is not found in the supplied text, or does not say what you claim, is discarded. Do not paraphrase inside "evidence".
 - ${UNTRUSTED_CONTENT_RULE}`;
 
 const PAGE_CHARS = 6_000;
@@ -50,7 +56,7 @@ const HIRING_PAGE_CHARS = 9_000;
  * model is not asked at all: code writes a brief that says so, because a model
  * given an empty page and a company name will happily describe the company.
  */
-export async function writeCompanyBrief(input: BriefInput, llm: LlmClient): Promise<BriefResult> {
+export async function writeCompanyBrief(input: BriefInput, llm: LlmClient, embedder: Embedder = lexicalEmbedder()): Promise<BriefResult> {
   const pages = [input.home, input.about, input.hiring].filter((page): page is CrawledPage => Boolean(page?.text));
   if (pages.length === 0 && input.discussion.length === 0) return nothingFound(input);
 
@@ -74,13 +80,12 @@ export async function writeCompanyBrief(input: BriefInput, llm: LlmClient): Prom
     maxOutputTokens: 1_500,
   });
 
-  // The same rule as for requirements: a stage or insight must be traceable to the text it claims to come from.
-  const hiringText = input.hiring?.text ?? "";
-  const discussionText = input.discussion.map((snippet) => snippet.text).join("\n");
-  const grounded = (claims: string[], support: string) =>
-    support ? claims.map((claim) => claim.trim()).filter((claim) => claim && wordOverlap(claim, support) >= 0.5) : [];
+  // The same rule as for requirements: the model quotes, code checks the quote is there, and then that it says what is claimed.
+  const stages = await checkSupport(proposed.hiring_stages.map(({ stage, evidence }) => ({ text: stage, evidence })), input.hiring?.text ?? "", embedder);
+  // An insight is checked against the one snippet its quote comes from, so the kit can say where it was said.
+  const insights = await checkInsights(proposed.interview_insights.map(({ insight, evidence }) => ({ text: insight, evidence })), input.discussion, embedder);
 
-  const interviewInsights = grounded(proposed.interview_insights, discussionText);
+  const interviewInsights = insights.kept.map((claim) => claim.text);
   return {
     brief: {
       summary: proposed.summary.trim(),
@@ -90,10 +95,28 @@ export async function writeCompanyBrief(input: BriefInput, llm: LlmClient): Prom
       sources: [...pages.map((page) => page.url), ...(interviewInsights.length > 0 ? input.discussion.map((snippet) => snippet.url) : [])],
       origin: "generated",
     },
-    hiringStages: grounded(proposed.hiring_stages, hiringText),
+    hiringStages: stages.kept.map((claim) => claim.text),
     interviewInsights,
+    evidence: [
+      ...stages.kept.map((claim) => ({ claim: claim.text, quote: claim.quote, source: "hiring-page" as const, url: input.hiring!.url })),
+      ...insights.kept.map((claim) => ({ claim: claim.text, quote: claim.quote, source: "public-discussion" as const, ...(claim.url ? { url: claim.url } : {}) })),
+    ],
+    rejected: [
+      ...stages.dropped.map((claim) => `hiring stage "${claim.text}": ${claim.reason}`),
+      ...insights.dropped.map((claim) => `interview insight "${claim.text}": ${claim.reason}`),
+    ],
   };
 }
+
+async function checkInsights(claims: Array<{ text: string; evidence: string }>, discussion: DiscussionSnippet[], embedder: Embedder) {
+  const checked: SupportResult = await checkSupport(claims, discussion.map((snippet) => snippet.text).join("\n"), embedder);
+  return {
+    dropped: checked.dropped,
+    kept: checked.kept.map((claim) => ({ ...claim, url: discussion.find((snippet) => isWithin(snippet.text, claim.quote))?.url })),
+  };
+}
+
+const isWithin = (text: string, quote: string) => text.replace(/\s+/g, " ").toLowerCase().includes(quote.replace(/\s+/g, " ").toLowerCase());
 
 function nothingFound(input: BriefInput): BriefResult {
   const why = input.siteFailure ? `The company site could not be read: ${input.siteFailure}` : "The company site had no readable content.";
@@ -106,5 +129,7 @@ function nothingFound(input: BriefInput): BriefResult {
     },
     hiringStages: [],
     interviewInsights: [],
+    evidence: [],
+    rejected: [],
   };
 }
