@@ -119,7 +119,16 @@ export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher,
       aboutScore: parent?.aboutScore ?? 0,
     };
     pages.push(page);
-    log.push({ source: "company-site", url: result.url, outcome: clean.text.length > 0 ? "used" : "empty", ...(clean.text.length === 0 ? { reason: "The page has no readable text; it may need JavaScript to render." } : {}) });
+    log.push({
+      source: "company-site",
+      url: result.url,
+      outcome: clean.text.length > 0 ? "used" : "empty",
+      ...(clean.text.length === 0
+        ? { reason: "The page has no readable text, and ships none for its scripts either; it needs a browser to render." }
+        : clean.textSource === "embedded"
+          ? { reason: "The page needs JavaScript to render, so its text was read from the data it ships for its own scripts." }
+          : {}),
+    });
 
     if (depth < maxDepth) enqueue(clean.links, depth + 1, Math.max(parent?.hiringScore ?? 0, page.processScore >= MIN_PROCESS_TERMS ? 9 : 0));
     return page;
