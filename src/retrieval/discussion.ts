@@ -27,8 +27,8 @@ interface Source {
 export interface DiscussionOptions {
   /**
    * A LangSearch API key. Optional. Most of what is written about a company's interviews is on blogs and forums that
-   * neither keyless source covers, and a general web search finds it. LangSearch has a free plan (1,000 searches a day),
-   * and a kit makes one. Without a key nothing changes, which is how an evaluator's clean clone runs.
+   * neither keyless source covers, and a general web search finds it. LangSearch has a free plan with a daily allowance,
+   * and a kit makes one search. Without a key nothing changes, which is how an evaluator's clean clone runs.
    */
   langSearchApiKey?: string;
 }
@@ -76,15 +76,13 @@ const langSearch = (apiKey: string): Source => ({
 interface LangSearchResult { name?: string; url?: string; snippet?: string; summary?: string }
 
 /**
- * A search that found nothing still answers with an (empty) list, and that is an honest "nothing found". Anything without
- * a list of results is not the response this was written for, and saying "nothing found" about it would be a guess: it
- * throws, and the source is logged as unreadable.
+ * A search that found nothing answers with an empty list, and that is an honest "nothing found". Anything without the list
+ * is not the response this was written for (an error body, a changed shape), and saying "nothing found" about it would be a
+ * guess: it throws, and the source is logged as unreadable.
  */
 function langSearchResults(body: unknown): LangSearchResult[] {
-  const answer = body as { data?: { webPages?: { value?: unknown } | null } } | null;
-  const pages = answer && typeof answer === "object" ? answer.data?.webPages : undefined;
-  if (pages && Array.isArray(pages.value)) return pages.value as LangSearchResult[];
-  if (answer && typeof answer === "object" && answer.data && typeof answer.data === "object" && (pages === undefined || pages === null)) return [];
+  const value = (body as { data?: { webPages?: { value?: unknown } | null } } | null)?.data?.webPages?.value;
+  if (Array.isArray(value)) return value as LangSearchResult[];
   throw new Error("Unexpected web search response.");
 }
 

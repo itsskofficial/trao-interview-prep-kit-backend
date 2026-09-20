@@ -64,7 +64,8 @@ describe("public discussion search", () => {
 });
 
 describe("the optional web search", () => {
-  const isSearch = (url: string) => url.includes("api.langsearch.com");
+  // The host, parsed: a substring test would also match evil.example/?next=api.langsearch.com.
+  const isSearch = (url: string) => new URL(url).hostname === "api.langsearch.com";
   const keyless = (url: string) => json(url, url.includes("algolia") ? { hits: [] } : { items: [] });
   const found = (url: string) =>
     json(url, {
@@ -115,8 +116,8 @@ describe("the optional web search", () => {
 
     expect(await logOf({ code: 429, msg: "daily allowance used" })).toMatchObject({ outcome: "skipped" });
     expect(await logOf({ data: { webPages: { value: "soon" } } })).toMatchObject({ outcome: "skipped" });
-    // A search that found nothing still answers properly, and that is a real "nothing found".
+    expect(await logOf({ data: { queryContext: { originalQuery: "x" } } })).toMatchObject({ outcome: "skipped" });
+    // A search that found nothing still answers with a list, an empty one, and that is a real "nothing found".
     expect(await logOf({ data: { webPages: { value: [] } } })).toMatchObject({ outcome: "empty" });
-    expect(await logOf({ data: { queryContext: { originalQuery: "x" } } })).toMatchObject({ outcome: "empty" });
   });
 });
