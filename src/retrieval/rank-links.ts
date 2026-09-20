@@ -50,13 +50,20 @@ function strongestSignal(haystack: string, signals: Signal[]): number {
   return 0;
 }
 
-export function rankLink(link: PageLink, depth: number, parentHiringScore = 0): RankedLink | undefined {
+/** A page, and not one of the pages every site has that are never the answer. Says nothing about whether it is worth fetching. */
+export function isFollowable(link: PageLink): boolean {
   const url = new URL(link.url);
-  if (NOT_A_PAGE.test(url.pathname)) return undefined;
-
+  if (NOT_A_PAGE.test(url.pathname)) return false;
   const path = words(safeDecode(url.pathname));
   const anchor = words(link.text);
-  if (NOISE.some((phrase) => anchor.includes(` ${phrase} `) || path.includes(` ${phrase} `))) return undefined;
+  return !NOISE.some((phrase) => anchor.includes(` ${phrase} `) || path.includes(` ${phrase} `));
+}
+
+export function rankLink(link: PageLink, depth: number, parentHiringScore = 0): RankedLink | undefined {
+  if (!isFollowable(link)) return undefined;
+  const url = new URL(link.url);
+  const path = words(safeDecode(url.pathname));
+  const anchor = words(link.text);
 
   // Anchor text is what the company chose to call the page, so it counts a little more than the path.
   const intent = (signals: Signal[]) => {

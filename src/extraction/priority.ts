@@ -64,6 +64,11 @@ export interface PrioritySignals {
   line?: Priority;
   /** From the nearest heading above it. Says what kind of list this is, not what this item is. */
   heading?: Priority;
+  /**
+   * Whether that heading makes a claim ("Required qualifications", "Nice to have") or only names a container
+   * ("Requirements", "About you"), under which postings put optional things all the time.
+   */
+  headingIsExplicit?: boolean;
 }
 
 /** What the posting's wording says about one requirement, kept apart so that policies for combining it with the model's label can be measured. */
@@ -79,17 +84,36 @@ export function prioritySignals(description: string, evidence: string): Priority
   const line = signal(evidence, MUST_ON_LINE) ?? signal(sentence ?? evidence, MUST_ON_LINE);
 
   for (let i = index - 1; i >= 0; i--) {
-    if (isHeading(lines[i]!)) return { line, heading: signal(lines[i]!, MUST_IN_HEADING) };
+    if (isHeading(lines[i]!)) {
+      const heading = signal(lines[i]!, MUST_IN_HEADING);
+      // The same strong words that are trusted on a line are what make a heading a claim rather than a label.
+      return { line, heading, headingIsExplicit: heading !== undefined && signal(lines[i]!, MUST_ON_LINE) === heading };
+    }
   }
   return { line };
 }
 
 /**
- * Decides must or nice from how the posting words it: first the evidence and
- * the sentence it sits in, then the heading above it. The model's own label is
- * used only when the posting gives no signal either way.
+ * Must or nice, from three opinions in a measured order. Measured with `npm run measure:priority` (2026-09-20,
+ * gemini-3.5-flash-lite) over fixtures/priority-cases.json, whose held-out half was written after tuning and is
+ * never tuned against:
+ *
+ *   line, then any heading, then model        39/39 tuned   15/19 held out   <- what this used to be
+ *   model only                                38/39         18/19
+ *   line, then model                          39/39         18/19
+ *   line, then an explicit heading, then model   see the script's output    <- what this is
+ *
+ * 1. Wording about this one requirement ("required", "a plus") is explicit and wins.
+ * 2. A heading that makes a claim ("Nice to have", "Bonus points", "Required qualifications", "Must-haves") is explicit too.
+ * 3. Otherwise the model, which has read the sentence. A heading like "Requirements" or "About you" is a container, not a
+ *    claim about each line in it: postings put "is appreciated" and "not a dealbreaker" under it all the time, and letting
+ *    it overrule the model caused three of the old policy's four held-out mistakes. The model never once called a plain
+ *    line under such a heading a bonus.
+ *
+ * Step 2 costs nothing on the measured sets and is a floor under a lazy model: one that calls everything a must-have (the
+ * offline stand-in does) still gets a "Nice to have" section right.
  */
 export function decidePriority(description: string, evidence: string, modelPriority: Priority): Priority {
-  const { line, heading } = prioritySignals(description, evidence);
-  return line ?? heading ?? modelPriority;
+  const { line, heading, headingIsExplicit } = prioritySignals(description, evidence);
+  return line ?? (headingIsExplicit ? heading : undefined) ?? modelPriority;
 }

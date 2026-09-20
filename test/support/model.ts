@@ -1,7 +1,7 @@
 import { fakeLlmClient } from "../../src/llm/fake";
 import type { LlmClient, LlmProvider, ProviderRequest } from "../../src/llm/types";
 
-export type ModelRoute = "extract" | "brief" | "technical" | "behavioural" | "system-design" | "company-fit" | "gaps" | "flashcards";
+export type ModelRoute = "extract" | "brief" | "technical" | "behavioural" | "system-design" | "company-fit" | "gaps" | "flashcards" | "links";
 
 type Answer = object | Error | ((request: ProviderRequest) => object);
 
@@ -11,6 +11,7 @@ export function routeOf(request: ProviderRequest): ModelRoute {
   if (request.system.startsWith("You read one job description")) return "extract";
   if (request.system.startsWith("You write a short, factual company brief")) return "brief";
   if (request.system.startsWith("You write flashcards")) return "flashcards";
+  if (request.system.startsWith("You are helping find the page")) return "links";
   if (request.system.startsWith("You write technical")) return "technical";
   if (request.system.startsWith("You write behavioural")) return "behavioural";
   if (request.system.startsWith("You write system design")) return "system-design";
@@ -33,6 +34,7 @@ const DEFAULTS: Record<ModelRoute, Answer> = {
   "system-design": (request) => ({ questions: [{ requirement_ids: requirementIds(request).slice(0, 2), prompt: "Design a system", answer_outline: "Components", difficulty: 3 }] }),
   "company-fit": { questions: [{ requirement_ids: [], prompt: "Why this company?", answer_outline: "Motivation", difficulty: 1 }] },
   gaps: oneQuestionPerRequirement,
+  links: { links: [] },
   flashcards: (request) => ({ flashcards: requirementIds(request).map((id) => ({ front: `Front ${id}`, back: "Back", requirement_ids: [id] })) }),
 };
 

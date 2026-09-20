@@ -17,7 +17,7 @@ export type RegenerationTarget = { section: "brief" } | { section: "questions"; 
 /** What the last regeneration replaced, kept so it can be put back. Only the most recent one is kept. */
 export type UndoSnapshot =
   | { section: "questions"; category: QuestionCategory; removed: Question[]; addedIds: string[]; at: Date }
-  | { section: "brief"; previous: Pick<Kit, "company_brief" | "hiring_stages" | "interview_insights">; at: Date };
+  | { section: "brief"; previous: Pick<Kit, "company_brief" | "hiring_stages" | "interview_insights" | "research_evidence">; at: Date };
 
 export interface KitDoc {
   _id: ObjectId;

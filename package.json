@@ -16,6 +16,8 @@
     "dev": "tsx watch src/server.ts",
     "selfcheck": "tsx scripts/selfcheck.ts",
     "dev:offline": "tsx scripts/dev-offline.ts",
+    "calibrate": "tsx scripts/calibrate-similarity.ts",
+    "judge": "tsx scripts/judge.ts",
     "measure:priority": "tsx scripts/measure-priority.ts"
   },
   "dependencies": {

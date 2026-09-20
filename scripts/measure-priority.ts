@@ -34,6 +34,7 @@ export const POLICIES: Record<string, (signals: PrioritySignals, model: Priority
   "model only": (_signals, model) => model,
   "line, then model": ({ line }, model) => line ?? model,
   "line, then a nice heading, then model": ({ line, heading }, model) => line ?? (heading === "nice" ? "nice" : undefined) ?? model,
+  "line, then an explicit heading, then model (in use)": ({ line, heading, headingIsExplicit }, model) => line ?? (headingIsExplicit ? heading : undefined) ?? model,
 };
 
 async function main(): Promise<void> {
