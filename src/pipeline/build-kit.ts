@@ -9,7 +9,7 @@ import type { Kit, Question, QuestionCategory, Requirement } from "../kit/schema
 import { validateKit } from "../kit/validate";
 import { LlmError, type LlmClient } from "../llm/types";
 import { crawlCompanySite, type CrawledPage, type SiteCrawl } from "../retrieval/crawl";
-import { createDiscussionSearch, type DiscussionResult, type DiscussionSearch } from "../retrieval/discussion";
+import { createDiscussionSearch, type DiscussionOptions, type DiscussionResult, type DiscussionSearch } from "../retrieval/discussion";
 import type { PageFetcher } from "../retrieval/fetcher";
 import { createLinkPicker } from "../retrieval/pick-links";
 import { allocateSchedule } from "../scheduling/allocate";
@@ -40,6 +40,8 @@ export interface PipelineDeps {
   embedder?: Embedder;
   /** Defaults to the public sources in retrieval/discussion, reached through `fetcher`. */
   searchDiscussion?: DiscussionSearch;
+  /** Keys for optional sources. With none, discussion comes from the keyless sources alone. */
+  discussion?: DiscussionOptions;
   now?: () => Date;
   onProgress?: (event: ProgressEvent) => void;
   /** Set when the caller has given up on this kit (a batch case past its time budget). No further model call is started. */
@@ -102,7 +104,7 @@ async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: Trac
     deps.signal?.throwIfAborted();
     onProgress({ step, status: "started" });
   };
-  const searchDiscussion = deps.searchDiscussion ?? createDiscussionSearch(fetcher);
+  const searchDiscussion = deps.searchDiscussion ?? createDiscussionSearch(fetcher, deps.discussion);
   const notes: string[] = [];
 
   // 1. Extract. Pasted text needs no retrieval.

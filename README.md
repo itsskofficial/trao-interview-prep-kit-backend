@@ -6,7 +6,7 @@ Turns a job description, a company website and a number of days into a structure
 
 - **Live app:** https://trao-interview-prep-kit.vercel.app
 - **Live API:** https://trao-interview-prep-kit-backend.onrender.com (`/api/health`)
-- **Why each decision was made:** [DECISIONS.md](DECISIONS.md), the decision log (37 short ADR-style entries, written as the work happened). This README summarises them.
+- **Why each decision was made:** [DECISIONS.md](DECISIONS.md), the decision log (38 short ADR-style entries, written as the work happened). This README summarises them.
 - **How it was built:** the base application went straight to `main`; everything after the first deployment went through pull requests, merged with CI green and review comments answered ([decision 28](DECISIONS.md)). The pull request history is part of the record.
 
 ## Contents
@@ -121,7 +121,7 @@ Retrieval, extraction, generation, scheduling and persistence do not import each
 
 ## 5. Retrieval approach and sources
 
-**Sources used:** the company's own site (the URL given, and same-origin pages found by crawling it, plus `sitemap.xml` beside it when present); **Hacker News** through the Algolia search API; **Stack Exchange Workplace** through the Stack Exchange API. Both APIs are official, keyless and open to programmatic use. **Reddit and Glassdoor were left out**: most interview discussion lives there, but their robots.txt and terms forbid unauthenticated automated access.
+**Sources used:** the company's own site (the URL given, and same-origin pages found by crawling it, plus `sitemap.xml` beside it when present); **Hacker News** through the Algolia search API; **Stack Exchange Workplace** through the Stack Exchange API. Both APIs are official, keyless and open to programmatic use. An optional third, a general web search, is used only when a key for it is configured. **Reddit and Glassdoor were left out**: most interview discussion lives there, but their robots.txt and terms forbid unauthenticated automated access.
 
 **Finding the hiring page.** No path is assumed. When the company's address is a folder on a shared origin (`http://host/acme/`), its site is that folder and nothing beside it, so another company's hiring page on the same host cannot be picked up. Every in-scope link is scored in code from its anchor text (what the company chose to call the page), the words in its path, where it sits (navigation and footers get a point) and its depth. Interviewing and hiring words score highest, careers and jobs next, then handbook, people, culture and engineering pages, which are rarely the answer but often one click from it. The crawler always fetches the best-scoring unvisited link next, to depth two, within twelve pages. A link called "Careers" proves nothing, so a page counts as the hiring page only if **its own text** describes a process: at least three process terms, matched as whole words, and one unambiguous anchor such as "interview". "Round" and "stage" only count beside an ordinal, and "offer" only in "make an offer", because a careers page that says "we offer competitive pay to engineers around the world" has not described a process. Links found on such a page inherit part of its score, which is how a vaguely named "What to expect" page two clicks down gets fetched.
 
@@ -273,7 +273,7 @@ What remains:
 
 - **No browser rendering.** A page that fetches its content after loading yields nothing, and the log says so. Pages that ship their content in the HTML for their own scripts are read ([decision 36](DECISIONS.md)). A hosted scraper was ruled out: it cannot reach a site served from the evaluator's localhost, and it would need another key.
 - **Priority is still a judgement.** Measured at 18 of 19 on phrasings never tuned against; the remaining miss is the model's own reading of "Additional skills", left alone because fixing it would mean tuning on the held-out set.
-- **Discussion search is name-based** and limited to two keyless sources, so a small company, or one with a common name, mostly yields nothing usable. That is reported, not hidden. A general web search would find more and needs a key the evaluators will not have.
+- **Discussion search is name-based**, and without a key it is limited to two keyless sources, so a small company, or one with a common name, mostly yields nothing usable. That is reported, not hidden. Setting `BRAVE_SEARCH_API_KEY` adds a general web search, filtered and quote-checked like every other source ([decision 38](DECISIONS.md)); it is off by default because an evaluator's clean clone has no such key, and it has not been exercised against the live service.
 - **The judge cannot check facts about a company**, since it never sees the pages. Those are guarded by the verbatim-quote rule instead.
 - **The free hosting tier sleeps.** A scheduled request keeps it awake, and the interface says "waking the server" if a request is slow.
 - **Not built, on purpose:** email verification, password reset, roles, anything in the brief's out-of-scope list.

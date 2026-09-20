@@ -211,3 +211,22 @@ describe("cleanHtml", () => {
     expect(cleanHtml(`<body><p>${"word ".repeat(10_000)}</p></body>`, "http://x.test/", 500).text.length).toBe(500);
   });
 });
+
+describe("request headers for a keyed API", () => {
+  it("are sent to the origin that was asked for, and not to wherever it redirects", async () => {
+    const received: Record<string, string | undefined> = {};
+    const elsewhere = await startSite({ "/landed": (request, response) => { received.elsewhere = request.headers["x-subscription-token"] as string | undefined; response.writeHead(200, { "content-type": "application/json" }).end("{}"); } });
+    const api = await startSite({
+      "/search": (request, response) => { received.api = request.headers["x-subscription-token"] as string | undefined; response.writeHead(302, { location: `${elsewhere.origin.replace("localhost", "127.0.0.1")}/landed` }).end(); },
+    });
+    const fetcher = createPageFetcher({ allowPrivate: true, localDelayMs: 0, retries: 0, timeoutMs: 2_000 });
+
+    const result = await fetcher.fetchPage(`${api.origin}/search`, "json", { headers: { "X-Subscription-Token": "a-secret-key" } });
+    await fetcher.close();
+    await api.close();
+    await elsewhere.close();
+
+    expect(result.ok).toBe(true);
+    expect(received).toEqual({ api: "a-secret-key", elsewhere: undefined });
+  });
+});

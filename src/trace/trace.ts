@@ -1,5 +1,5 @@
 import type { LlmCallRecord } from "../llm/types";
-import type { Accept, FetchResult, PageFetcher, SkipReason } from "../retrieval/fetcher";
+import type { Accept, FetchOptions, FetchResult, PageFetcher, SkipReason } from "../retrieval/fetcher";
 
 /**
  * Everything one run of the pipeline did, in the order it did it: steps with
@@ -178,10 +178,11 @@ export function createTraceRecorder(now: () => number = Date.now): TraceRecorder
 /** The same fetcher, with every fetch reported. The wrapped fetcher is shared between runs; the wrapper belongs to one. */
 export function tracedFetcher(fetcher: PageFetcher, recorder: Pick<TraceRecorder, "fetch">, now: () => number = Date.now): PageFetcher {
   return {
-    async fetchPage(url: string, accept: Accept = "html"): Promise<FetchResult> {
+    // Headers are passed through and never recorded: that is where a search key travels.
+    async fetchPage(url: string, accept: Accept = "html", options?: FetchOptions): Promise<FetchResult> {
       const startedAt = now();
       // The fetcher's contract is never to throw. Should it ever, the run still learns that a fetch was tried and failed.
-      const result = await fetcher.fetchPage(url, accept).catch((error: unknown) => {
+      const result = await fetcher.fetchPage(url, accept, options).catch((error: unknown) => {
         recorder.fetch({ url: safeAddress(url), accept, outcome: "network", durationMs: now() - startedAt, chars: 0 });
         throw error;
       });
