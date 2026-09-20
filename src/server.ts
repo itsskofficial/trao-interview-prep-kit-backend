@@ -21,13 +21,15 @@ const llm = createLlmClientFromConfig(config, (event) => {
   if (event.type === "repair") logger.info({ step: event.step, provider: event.provider }, "model answer repaired");
 });
 const fetcher = createPageFetcher({ allowPrivate: allowsPrivateUrls(config) });
-const runner = createJobRunner(db, { llm, fetcher }, undefined, logger);
+const runner = createJobRunner(db, { llm, fetcher }, { logger });
 const kits = kitRepository(db);
 const regenerator = createRegenerator(kits, { llm, fetcher });
 
-// Jobs only live in this process. Whatever a previous process left unfinished is marked so, and can be retried.
-const interrupted = (await runner.recoverInterrupted()) + (await kits.failInterruptedRegenerations());
-if (interrupted > 0) logger.warn({ interrupted }, "marked unfinished jobs and regenerations as interrupted");
+// The jobs collection is the queue: whatever a previous process left queued or half-done is picked up from there.
+// Regenerations are short and belong to one request, so an unfinished one is marked failed and can be asked for again.
+const closed = await runner.start();
+const interrupted = await kits.failInterruptedRegenerations();
+if (closed + interrupted > 0) logger.warn({ closedJobs: closed, interruptedRegenerations: interrupted }, "closed work left unfinished by a previous process");
 
 const server = createApp({ db, config, runner, regenerator, logger }).listen(config.PORT, () => {
   logger.info({ port: config.PORT, env: config.NODE_ENV, provider: config.LLM_PROVIDER }, "API listening");
@@ -35,6 +37,10 @@ const server = createApp({ db, config, runner, regenerator, logger }).listen(con
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
-    server.close(() => void Promise.allSettled([db.close(), fetcher.close()]).finally(() => process.exit(0)));
+    // Running jobs go back to the queue first, so the process replacing this one picks them up at once.
+    void runner
+      .release()
+      .catch((error: unknown) => logger.error({ err: error }, "could not hand jobs back"))
+      .finally(() => server.close(() => void Promise.allSettled([db.close(), fetcher.close()]).finally(() => process.exit(0))));
   });
 }

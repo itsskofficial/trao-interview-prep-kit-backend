@@ -53,6 +53,10 @@ export interface JobDoc {
   status: JobStatus;
   /** True while queued or running. A unique index on it is what stops the same posting being generated twice at once. */
   active?: true;
+  /** Runs of this job so far, counting one in progress. */
+  attempts: number;
+  /** Set while a process is running the job. It is renewed as the job runs, and the job is claimable again once it lapses. */
+  lease?: { owner: string; expiresAt: Date };
   steps: Array<ProgressEvent & { at: Date }>;
   error?: CaseError;
   /** Kept for failed runs too, which is when it is most wanted. */
@@ -99,6 +103,8 @@ export async function connectDatabase(uri: string, name: string): Promise<Databa
     database.kits.createIndex({ userId: 1, updatedAt: -1 }),
     database.kits.createIndex({ userId: 1, fingerprint: 1 }),
     database.jobs.createIndex({ userId: 1, createdAt: -1 }),
+    // What the runner's claim scans: the few jobs that are active, oldest first.
+    database.jobs.createIndex({ active: 1, status: 1, createdAt: 1 }, { partialFilterExpression: { active: true } }),
     database.usage.createIndex({ userId: 1, at: -1 }),
     database.usage.createIndex({ at: 1 }, { expireAfterSeconds: 2 * 60 * 60 }),
     database.jobs.createIndex({ userId: 1, fingerprint: 1 }, { unique: true, partialFilterExpression: { active: true } }),

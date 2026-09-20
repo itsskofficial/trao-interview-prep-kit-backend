@@ -89,6 +89,7 @@ export function jobsRouter(db: Database, kits: KitRepository, runner: JobRunner,
       label: input.jd.split(/\r?\n/).find((line) => line.trim())?.trim().slice(0, 120) ?? "Untitled role",
       status: "queued",
       active: true,
+      attempts: 0,
       steps: [],
       ...(batchId ? { batchId } : {}),
       createdAt: now,
@@ -164,7 +165,7 @@ export function jobsRouter(db: Database, kits: KitRepository, runner: JobRunner,
     const retried = await db.jobs
       .findOneAndUpdate(
         { _id: job._id, userId: owner, status: job.status },
-        { $set: { status: "queued", active: true, steps: [], updatedAt: new Date() }, $unset: { error: "", trace: "" } },
+        { $set: { status: "queued", active: true, attempts: 0, steps: [], updatedAt: new Date() }, $unset: { error: "", trace: "", lease: "" } },
         { returnDocument: "after" },
       )
       .catch(async (error: unknown) => {
