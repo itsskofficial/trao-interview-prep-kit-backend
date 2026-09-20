@@ -2,7 +2,8 @@ import * as cheerio from "cheerio";
 import type { ResearchLogEntry } from "../kit/schema";
 import type { FetchResult, PageFetcher } from "./fetcher";
 import { cleanHtml, type PageLink } from "./html";
-import { byScore, rankLink, type RankedLink } from "./rank-links";
+import type { LinkCandidate, LinkPicker } from "./pick-links";
+import { byScore, isFollowable, rankLink, type RankedLink } from "./rank-links";
 
 export interface CrawledPage {
   url: string;
@@ -33,6 +34,13 @@ export interface CrawlOptions {
   /** Wall-clock budget for the whole crawl. A slow site costs the research, not the kit. */
   deadlineMs?: number;
   now?: () => number;
+  /**
+   * Asked which unfollowed links to try when ranking by wording found no hiring page. Optional: without it the
+   * crawl is code alone. Whatever it suggests is fetched and put to the same test as every other page.
+   */
+  pickLinks?: LinkPicker;
+  /** For the picker's prompt, when the posting named the company. */
+  company?: string;
 }
 
 /**
@@ -70,7 +78,7 @@ const CONFIDENT_PROCESS_TERMS = 6;
  * called "Careers" that leads to a job list does not qualify.
  */
 export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher, options: CrawlOptions = {}): Promise<SiteCrawl> {
-  const { maxPages = 12, maxDepth = 2, deadlineMs = 45_000, now = Date.now } = options;
+  const { maxPages = 12, maxDepth = 2, deadlineMs = 45_000, now = Date.now, pickLinks, company } = options;
   const startedAt = now();
   const log: ResearchLogEntry[] = [];
   const pages: CrawledPage[] = [];
@@ -91,6 +99,8 @@ export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher,
   };
   const visited = new Set<string>([normaliseUrl(homeResult.url), normaliseUrl(companyUrl)]);
   const queue: RankedLink[] = [];
+  // Every same-site link seen, whether or not its wording earned it a place in the queue.
+  const seen = new Map<string, LinkCandidate>();
 
   const visit = (result: Extract<FetchResult, { ok: true }>, depth: number, parent?: RankedLink): CrawledPage => {
     // Kept long: a handbook page can bury the stages tens of thousands of characters in. The brief step picks its excerpt.
@@ -113,6 +123,7 @@ export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher,
   const enqueue = (links: PageLink[], depth: number, parentHiringScore: number) => {
     for (const link of links) {
       if (!inScope(link.url) || visited.has(normaliseUrl(link.url))) continue;
+      if (link.text.trim() && isFollowable(link) && !seen.has(normaliseUrl(link.url))) seen.set(normaliseUrl(link.url), { url: link.url, text: link.text });
       const ranked = rankLink(link, depth, parentHiringScore);
       if (ranked && !queue.some((queued) => normaliseUrl(queued.url) === normaliseUrl(ranked.url))) queue.push(ranked);
     }
@@ -150,6 +161,41 @@ export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher,
     // Enough: a page that is unmistakably about the process, and something that says what the company does.
     const hasAbout = pages.some((candidate) => candidate.aboutScore >= 5);
     if (page.processScore >= CONFIDENT_PROCESS_TERMS && hasAbout) break;
+  }
+
+  // Ranking reads English hiring words. "Life at Acme" or "Arbeiten bei uns" never earns a fetch that way, so when
+  // nothing was found, and only then, a model is shown the links that were passed over and may name three to try.
+  const foundByWording = pages.some((page) => page.processScore >= MIN_PROCESS_TERMS);
+  if (!foundByWording && pickLinks && now() - startedAt <= deadlineMs) {
+    const candidates = [...seen.entries()].filter(([key]) => !visited.has(key)).map(([, link]) => link);
+    const picks = candidates.length > 0 ? await pickLinks(candidates, company || siteName(homeResult.body, home.title)).catch(() => undefined) : [];
+    if (picks === undefined) {
+      log.push({ source: "link-picker", outcome: "skipped", reason: "Asking a model which links to try failed; the crawl stands as it was." });
+    } else if (candidates.length > 0) {
+      log.push({
+        source: "link-picker",
+        outcome: picks.length > 0 ? "used" : "empty",
+        reason:
+          picks.length > 0
+            ? `No link looked like a hiring page by its wording, so a model was shown the ${candidates.length} link(s) not followed and chose ${picks.length} to try.`
+            : `No link looked like a hiring page by its wording. A model was shown the ${candidates.length} link(s) not followed and found none worth trying.`,
+      });
+    }
+
+    for (const pick of picks ?? []) {
+      // Only what the crawl itself saw on this site: a made-up or off-site address is not fetched.
+      const key = normaliseUrl(pick.url);
+      if (!seen.has(key) || visited.has(key) || now() - startedAt > deadlineMs) continue;
+      visited.add(key);
+      const result = await fetcher.fetchPage(pick.url);
+      if (!result.ok) {
+        log.push({ source: "company-site", url: result.url, outcome: "skipped", reason: describe(result) });
+        continue;
+      }
+      if (!inScope(result.url)) continue;
+      const page = visit(result, 1);
+      if (page.processScore >= MIN_PROCESS_TERMS) break;
+    }
   }
 
   const hiring = pages

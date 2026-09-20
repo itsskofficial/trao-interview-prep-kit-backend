@@ -9,6 +9,7 @@ import type { KitDoc, RegenerationTarget } from "../persistence/mongo";
 import type { PipelineDeps } from "../pipeline/build-kit";
 import { crawlCompanySite } from "../retrieval/crawl";
 import { createDiscussionSearch } from "../retrieval/discussion";
+import { createLinkPicker } from "../retrieval/pick-links";
 import { lexicalEmbedder } from "../similarity/embedder";
 import { withoutDuplicates } from "../similarity/questions";
 import { isProtected, reconcile } from "./operations";
@@ -77,7 +78,7 @@ export function createRegenerator(kits: KitRepository, pipeline: PipelineDeps): 
   async function regenerateBrief(userId: ObjectId, kitId: string, kit: Kit, force: boolean): Promise<void> {
     // What the brief said when the user asked. "Replace my edited brief" is consent to replace this text, not whatever they type next.
     const asked = briefText(kit);
-    const crawl = await crawlCompanySite(kit.source.company_url, pipeline.fetcher);
+    const crawl = await crawlCompanySite(kit.source.company_url, pipeline.fetcher, { pickLinks: createLinkPicker(pipeline.llm), company: kit.source.company });
     const company = kit.source.company || crawl.siteName;
     const discussion = await (pipeline.searchDiscussion ?? createDiscussionSearch(pipeline.fetcher))(company);
     const researched = await writeCompanyBrief(

@@ -11,6 +11,7 @@ import { LlmError, type LlmClient } from "../llm/types";
 import { crawlCompanySite, type CrawledPage, type SiteCrawl } from "../retrieval/crawl";
 import { createDiscussionSearch, type DiscussionResult, type DiscussionSearch } from "../retrieval/discussion";
 import type { PageFetcher } from "../retrieval/fetcher";
+import { createLinkPicker } from "../retrieval/pick-links";
 import { allocateSchedule } from "../scheduling/allocate";
 import { mergeDuplicateQuestions } from "../similarity/questions";
 import { lexicalEmbedder, type Embedder } from "../similarity/embedder";
@@ -114,7 +115,7 @@ async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: Trac
   // 2. Crawl the company site. A homepage is only useful once its links have been ranked and followed.
   onProgress({ step: "crawl", status: "started" });
   // Whatever goes wrong while reading someone else's site costs the research, never the kit.
-  const crawl = await crawlCompanySite(withScheme(input.companyUrl), fetcher).catch(
+  const crawl = await crawlCompanySite(withScheme(input.companyUrl), fetcher, { pickLinks: createLinkPicker(llm), company: role.company }).catch(
     (error: unknown): SiteCrawl => ({
       reachable: false,
       failure: "The site could not be read.",
