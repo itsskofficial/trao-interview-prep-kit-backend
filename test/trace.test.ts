@@ -326,3 +326,25 @@ describe("prompt fingerprint", () => {
     expect(promptFingerprint()).toMatch(/^[0-9a-f]{12}$/);
   });
 });
+
+describe("a run that has been given up on", () => {
+  it("stops at the next step instead of fetching and assembling a kit nobody is waiting for", async () => {
+    const abandoned = new AbortController();
+    const fetched: string[] = [];
+    const model = routedModel({
+      extract: () => {
+        abandoned.abort();
+        return { title: "Engineer", seniority: "", location: "", company: "", responsibilities: [], requirements: [{ text: "PostgreSQL", evidence: "PostgreSQL", kind: "technical", priority: "must" }] };
+      },
+    });
+    const traces: RunTrace[] = [];
+    const run = buildKit(
+      { jd: "Engineer\n\nRequirements\n- PostgreSQL", companyUrl: "https://acme.example/", days: 2 },
+      { llm: model.llm, signal: abandoned.signal, onTrace: (trace) => traces.push(trace), fetcher: { fetchPage: async (url) => (fetched.push(url), { ok: false, url, reason: "network", detail: "" }), close: async () => undefined } },
+    );
+
+    await expect(run).rejects.toThrow();
+    expect(fetched).toEqual([]);
+    expect(traces[0]!.steps.map((step) => step.step)).toEqual(["extract"]);
+  });
+});
