@@ -52,7 +52,8 @@ export function cleanHtml(html: string, pageUrl: string, maxTextChars = 20_000):
   });
 
   const title = $("title").first().text().trim() || $("h1").first().text().trim();
-  const description = $('meta[name="description"]').attr("content")?.trim() ?? "";
+  // Client-rendered sites often fill in only the Open Graph tags, for link previews.
+  const description = ($('meta[name="description"]').attr("content") || $('meta[property="og:description"]').attr("content") || "").trim();
 
   // Prefer the page's own main content; chrome (nav, header, footer) is not what the company says about itself.
   const root = $($("main").get(0) ?? $("body").get(0) ?? $.root().get(0)!);
@@ -123,7 +124,9 @@ function proseFrom(shipped: Shipped, description: string): string[] {
   const lines: string[] = [];
   const add = (text: string) => {
     // Content systems store rich text as HTML strings. It is cleaned like any other markup, hidden parts included.
-    const plain = /<[a-z][^>]*>/i.test(text) ? cleanHtml(`<body>${text}</body>`, "http://embedded.invalid/", 20_000).text : text;
+    // Anything that could be markup goes through the cleaner, a lone comment included: "<!-- ... -->" has no tag in it,
+    // and would otherwise walk in as a sentence.
+    const plain = /<[a-z!/][^>]*>/i.test(text) ? cleanHtml(`<body>${text}</body>`, "http://embedded.invalid/", 20_000).text : text;
     for (const line of toLines(plain)) {
       if (!looksLikeProse(line) || seen.has(line)) continue;
       seen.add(line);
