@@ -24,7 +24,7 @@ const llm = createLlmClientFromConfig(config, (event) => {
 const fetcher = createPageFetcher({ allowPrivate: allowsPrivateUrls(config) });
 // Comparing meaning is an aid: when the embedding call fails the pipeline carries on with a lexical comparison, and says so here.
 const embedder = createEmbedderFromConfig(config, (reason) => logger.warn({ reason }, "embeddings unavailable, compared lexically"));
-const discussion = { braveApiKey: config.BRAVE_SEARCH_API_KEY || undefined };
+const discussion = { langSearchApiKey: config.LANGSEARCH_API_KEY || undefined };
 const runner = createJobRunner(db, { llm, fetcher, embedder, discussion }, { logger });
 const kits = kitRepository(db);
 const regenerator = createRegenerator(kits, { llm, fetcher, embedder, discussion });
