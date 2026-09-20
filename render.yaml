@@ -15,6 +15,11 @@ services:
         value: production
       - key: LLM_PROVIDER
         value: gemini
+      # The browser never calls this API directly (the frontend proxies /api), so this only matters to tools that do.
+      - key: FRONTEND_ORIGIN
+        value: https://trao-interview-prep-kit.vercel.app
+      - key: LOG_LEVEL
+        value: info
       - key: MONGODB_URI
         sync: false
       - key: GEMINI_API_KEY

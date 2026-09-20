@@ -16,5 +16,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      # No test touches the network or a live model, so no secrets are needed.
-      - run: npm test
+      # No test touches the network or a live model, so no secrets are needed. Fails if coverage falls below the floor in vitest.config.ts.
+      - run: npm run test:coverage
+      # Known vulnerabilities in what is actually deployed. Development tools are left to Dependabot, which can wait for a fix.
+      - run: npm audit --omit=dev --audit-level=high
