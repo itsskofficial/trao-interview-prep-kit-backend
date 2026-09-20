@@ -22,6 +22,11 @@ async function main(): Promise<number> {
     console.error("Usage: npm run judge -- --from <kits.json> [--out <report.json>] [--min <1-5>]");
     return 2;
   }
+  const min = values.min === undefined ? undefined : Number(values.min);
+  if (min !== undefined && !(Number.isFinite(min) && min >= 1 && min <= 5)) {
+    console.error(`--min must be a number from 1 to 5, not "${values.min}".`);
+    return 2;
+  }
   const output = BatchOutputSchema.parse(JSON.parse((await readFile(values.from, "utf8")).replace(/^\uFEFF/, "")));
   const kits = output.kits.flatMap((entry) => (entry.status === "ok" ? [{ id: entry.id, kit: entry.kit }] : []));
   if (kits.length === 0) {
@@ -63,7 +68,6 @@ async function main(): Promise<number> {
   for (const item of report.weakest) console.log(`  ${item.mean}  [${item.kit} ${item.ref}] ${item.text.slice(0, 90)}\n        ${item.reason}`);
 
   if (!report.judgeCheck.reliable) return 2;
-  const min = values.min ? Number(values.min) : undefined;
   if (min !== undefined && report.overall.mean !== null && report.overall.mean < min) {
     console.error(`\nMean ${report.overall.mean} is below the required ${min}.`);
     return 1;

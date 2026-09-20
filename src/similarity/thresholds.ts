@@ -1,7 +1,12 @@
 /**
  * Chosen from `npm run calibrate` over the labelled pairs in fixtures/similarity.json, whose negatives
  * are deliberately hard. Measured on 2026-09-20 with gemini-embedding-2 (768 dimensions,
- * SEMANTIC_SIMILARITY). Re-run the script after changing the embedding model.
+ * plain text). Re-run the script after changing the embedding model.
+ *
+ * Request format. This model ignores `taskType`: vectors were identical with and without it. Its documented
+ * task prefix ("task: sentence similarity | query: ...") was measured too and made things worse for this job:
+ * paraphrases rose to 0.90-0.98 but the closest pair of different questions rose further, to 0.93, above the
+ * lowest paraphrase. Plain text kept them apart (0.894 against 0.887), so plain text is what is sent.
  *
  * Duplicate questions. Paraphrases scored 0.89-0.95, but so did different questions about the same
  * subject (a memory leak in Node.js and one on the JVM), so no threshold separates them: 0.90 gave

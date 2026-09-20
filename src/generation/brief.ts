@@ -3,6 +3,7 @@ import type { Kit, ResearchEvidence } from "../kit/schema";
 import type { LlmClient } from "../llm/types";
 import { UNTRUSTED_CONTENT_RULE, wrapUntrusted } from "../llm/untrusted";
 import { PROCESS_TERMS, STAGE_TERMS, type CrawledPage } from "../retrieval/crawl";
+import { isQuotedFrom } from "../extraction/evidence";
 import { processDigest } from "../retrieval/excerpt";
 import type { DiscussionSnippet } from "../retrieval/discussion";
 import { lexicalEmbedder, type Embedder } from "../similarity/embedder";
@@ -108,15 +109,21 @@ export async function writeCompanyBrief(input: BriefInput, llm: LlmClient, embed
   };
 }
 
+/**
+ * Each insight is checked against the one snippet its quote comes from, never against all of them joined:
+ * a quote that only exists across the seam between two people's comments was said by nobody.
+ */
 async function checkInsights(claims: Array<{ text: string; evidence: string }>, discussion: DiscussionSnippet[], embedder: Embedder) {
-  const checked: SupportResult = await checkSupport(claims, discussion.map((snippet) => snippet.text).join("\n"), embedder);
-  return {
-    dropped: checked.dropped,
-    kept: checked.kept.map((claim) => ({ ...claim, url: discussion.find((snippet) => isWithin(snippet.text, claim.quote))?.url })),
-  };
+  const kept: Array<SupportResult["kept"][number] & { url?: string }> = [];
+  const dropped: SupportResult["dropped"] = [];
+  for (const claim of claims) {
+    const said = discussion.find((snippet) => isQuotedFrom(snippet.text, claim.evidence));
+    const checked = await checkSupport([claim], said?.text ?? "", embedder);
+    kept.push(...checked.kept.map((supported) => ({ ...supported, url: said?.url })));
+    dropped.push(...checked.dropped);
+  }
+  return { kept, dropped };
 }
-
-const isWithin = (text: string, quote: string) => text.replace(/\s+/g, " ").toLowerCase().includes(quote.replace(/\s+/g, " ").toLowerCase());
 
 function nothingFound(input: BriefInput): BriefResult {
   const why = input.siteFailure ? `The company site could not be read: ${input.siteFailure}` : "The company site had no readable content.";

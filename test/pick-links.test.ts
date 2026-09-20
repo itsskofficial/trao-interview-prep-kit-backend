@@ -64,6 +64,24 @@ describe("crawl with a link picker", () => {
     expect(crawl.hiring).toBeUndefined();
   });
 
+  it("does not wait for a picker that outlasts the crawl's own deadline", async () => {
+    site = await oddlyNamed();
+    const started = Date.now();
+    const never: LinkPicker = () => new Promise(() => undefined);
+    const crawl = await crawlCompanySite(`${site.origin}/`, fetcher(), { pickLinks: never, deadlineMs: 600 });
+
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(crawl.reachable).toBe(true);
+    expect(crawl.log).toContainEqual(expect.objectContaining({ source: "link-picker", outcome: "skipped" }));
+  });
+
+  it("fetches at most three picked pages, however many the picker names", async () => {
+    const links = Array.from({ length: 6 }, (_, i) => `<a href="/odd-${i}">Odd page ${i}</a>`).join(" ");
+    site = await startSite({ "/": page("Nimbus", `<nav>${links}</nav><p>Nimbus makes forecasting tools.</p>`), ...Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`/odd-${i}`, page(`Odd ${i}`, "<p>Nothing about hiring.</p>")])) });
+    await crawlCompanySite(`${site.origin}/`, fetcher(), { pickLinks: async (candidates) => candidates });
+    expect(site.hits.filter((path) => path.startsWith("/odd-"))).toHaveLength(3);
+  });
+
   it("is not asked when ranking already found the page", async () => {
     site = await startSite({
       "/": page("Acme", `<a href="/careers/how-we-hire">How we hire</a><p>Acme makes anvils.</p>`),

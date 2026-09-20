@@ -70,6 +70,11 @@ const MIN_PROCESS_TERMS = 3;
 const MAX_PAGE_TEXT_CHARS = 80_000;
 /** A page this clearly about the process ends the search for a better one. */
 const CONFIDENT_PROCESS_TERMS = 6;
+/**
+ * Pages the link picker may add beyond `maxPages`. Deliberately outside the normal budget: the picker is only asked when
+ * that budget has been spent without finding a hiring page, which is exactly when it would otherwise have nothing left.
+ */
+const PICKED_PAGES = 3;
 
 /**
  * Crawls one company site: homepage, then the best-ranked same-site links,
@@ -168,7 +173,9 @@ export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher,
   const foundByWording = pages.some((page) => page.processScore >= MIN_PROCESS_TERMS);
   if (!foundByWording && pickLinks && now() - startedAt <= deadlineMs) {
     const candidates = [...seen.entries()].filter(([key]) => !visited.has(key)).map(([, link]) => link);
-    const picks = candidates.length > 0 ? await pickLinks(candidates, company || siteName(homeResult.body, home.title)).catch(() => undefined) : [];
+    // The model client has its own, longer patience and may retry. The crawl's deadline is the one that counts here.
+    const remaining = Math.max(0, deadlineMs - (now() - startedAt));
+    const picks = candidates.length > 0 ? await within(remaining, pickLinks(candidates, company || siteName(homeResult.body, home.title))).catch(() => undefined) : [];
     if (picks === undefined) {
       log.push({ source: "link-picker", outcome: "skipped", reason: "Asking a model which links to try failed; the crawl stands as it was." });
     } else if (candidates.length > 0) {
@@ -182,7 +189,7 @@ export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher,
       });
     }
 
-    for (const pick of picks ?? []) {
+    for (const pick of (picks ?? []).slice(0, PICKED_PAGES)) {
       // Only what the crawl itself saw on this site: a made-up or off-site address is not fetched.
       const key = normaliseUrl(pick.url);
       if (!seen.has(key) || visited.has(key) || now() - startedAt > deadlineMs) continue;
@@ -212,6 +219,14 @@ export async function crawlCompanySite(companyUrl: string, fetcher: PageFetcher,
   );
 
   return { reachable: true, siteName: siteName(homeResult.body, home.title), home, about, hiring, pages, log };
+}
+
+/** The promise, or a rejection once the time is up. The work is not cancelled, only no longer waited for. */
+function within<T>(ms: number, work: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error("out of time")), ms)));
+  work.catch(() => undefined);
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
 }
 
 function countProcessTerms(text: string): number {

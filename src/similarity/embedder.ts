@@ -70,14 +70,16 @@ export function geminiEmbedder(options: GeminiEmbedderOptions): Embedder {
           signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
           headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
           body: JSON.stringify({
-            requests: batch.map((text) => ({ model: `models/${model}`, content: { parts: [{ text }] }, taskType: "SEMANTIC_SIMILARITY", outputDimensionality: 768 })),
+            // Plain text on purpose. gemini-embedding-2 ignores `taskType` (measured: identical vectors with and without it), and its
+            // documented "task: sentence similarity | query: ..." prefix separated our labelled pairs worse, not better: see thresholds.ts.
+            requests: batch.map((text) => ({ model: `models/${model}`, content: { parts: [{ text }] }, outputDimensionality: 768 })),
           }),
         });
         if (!response.ok) throw new Error(`Gemini embeddings ${response.status}`);
 
         const body = (await response.json()) as { embeddings?: Array<{ values?: number[] }> };
         if (body.embeddings?.length !== batch.length) throw new Error("Gemini embeddings: wrong number of vectors returned.");
-        // Truncated dimensions do not come back normalised.
+        // The current model returns unit vectors at any size; older ones did not when truncated. Cheap, and makes `similarity` right either way.
         for (const embedding of body.embeddings) vectors.push(unit(embedding.values ?? []));
       }
       return { kind: "semantic", source: `gemini:${model}`, vectors };

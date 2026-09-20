@@ -57,8 +57,8 @@ describe("lexical embedder", () => {
 describe("Gemini embedder", () => {
   const ok = (count: number) => new Response(JSON.stringify({ embeddings: Array.from({ length: count }, () => ({ values: [3, 4] })) }), { status: 200 });
 
-  it("sends texts in batches of 100, marks each for similarity, and returns unit vectors", async () => {
-    const bodies: Array<{ requests: Array<{ model: string; taskType: string; content: { parts: Array<{ text: string }> } }> }> = [];
+  it("sends texts in batches of 100, as plain text, and returns unit vectors", async () => {
+    const bodies: Array<{ requests: Array<Record<string, unknown>> }> = [];
     const fetchFn = (async (_url: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init!.body));
       bodies.push(body);
@@ -68,7 +68,7 @@ describe("Gemini embedder", () => {
     const result = await embedder.embed(Array.from({ length: 130 }, (_, i) => `text ${i}`));
 
     expect(bodies.map((body) => body.requests.length)).toEqual([100, 30]);
-    expect(bodies[0]!.requests[0]).toMatchObject({ model: "models/gemini-embedding-2", taskType: "SEMANTIC_SIMILARITY", content: { parts: [{ text: "text 0" }] } });
+    expect(bodies[0]!.requests[0]).toEqual({ model: "models/gemini-embedding-2", content: { parts: [{ text: "text 0" }] }, outputDimensionality: 768 });
     expect(result).toMatchObject({ kind: "semantic", source: "gemini:gemini-embedding-2" });
     expect(result.vectors).toHaveLength(130);
     expect(result.vectors[0]).toEqual([0.6, 0.8]);

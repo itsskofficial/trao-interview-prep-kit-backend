@@ -380,6 +380,21 @@ describe("buildKit public discussion", () => {
     expect(model.requestFor("company-fit")!.prompt).toContain("routing problem");
   });
 
+  it("does not accept a quote stitched together from two different people's comments", async () => {
+    const two: DiscussionSearch = async () => ({
+      snippets: [
+        { source: "hacker-news", url: "https://news.ycombinator.com/item?id=1", text: "I interviewed at Acme Logistics last year and the process was" },
+        { source: "hacker-news", url: "https://news.ycombinator.com/item?id=2", text: "five rounds of whiteboard puzzles is what I got at a different company entirely." },
+      ],
+      log: [],
+    });
+    const brief = { ...acmeBrief, interview_insights: [{ insight: "The process was five rounds of whiteboard puzzles", evidence: "the process was five rounds of whiteboard puzzles" }] };
+    const kit = await buildKit(caseFor("acme"), deps(routedModel({ extract: extraction, brief }).llm, { searchDiscussion: two }));
+
+    expect(kit.interview_insights).toEqual([]);
+    expect(kit.company_brief.sources.some((url) => url.includes("ycombinator"))).toBe(false);
+  });
+
   it("does not cite search results the brief made no use of, and says why in the log", async () => {
     const model = routedModel({ extract: extraction, brief: { ...acmeBrief, interview_insights: [] } });
     const kit = await buildKit(caseFor("acme"), deps(model.llm, { searchDiscussion: found }));
