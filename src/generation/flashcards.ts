@@ -9,7 +9,7 @@ const ProposedFlashcardsSchema = z.object({
 
 export type DraftFlashcard = Omit<Flashcard, "id">;
 
-const SYSTEM = `You write flashcards for quick recall practice before an interview.
+export const SYSTEM = `You write flashcards for quick recall practice before an interview.
 
 Rules:
 - "front" is one short question or cue. "back" is the answer in one to three sentences.

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { buildKit, type PipelineDeps } from "../pipeline/build-kit";
 import { PipelineError } from "../pipeline/errors";
+import type { RunTrace } from "../trace/trace";
 import { CaseInputSchema, type BatchOutput, type CaseInput, type CaseResult } from "./schema";
 
 export interface BatchDeps extends PipelineDeps {
@@ -11,6 +12,8 @@ export interface BatchDeps extends PipelineDeps {
   log?: (line: string) => void;
   /** Called as each case finishes, with everything finished so far in input order, so a run killed late still leaves a file. */
   onPartial?: (finished: CaseResult[]) => void | Promise<void>;
+  /** Given each case's run trace. A case that timed out reports late, when its abandoned run notices; identical cases share one run and one trace. */
+  onCaseTrace?: (id: string, trace: RunTrace) => void;
 }
 
 /** A case result before it is given its id, so identical cases can share one. */
@@ -25,6 +28,7 @@ export async function runBatch(cases: unknown[], deps: BatchDeps): Promise<Batch
   const { concurrency = 2, caseTimeoutMs = 170_000, log = () => undefined, now = () => new Date() } = deps;
   const results = new Array<CaseResult>(cases.length);
   const inFlight = new Map<string, Promise<Outcome>>();
+  const traced = new Map<string, { ids: string[]; trace?: RunTrace }>();
   let next = 0;
   let finished = 0;
 
@@ -43,7 +47,15 @@ export async function runBatch(cases: unknown[], deps: BatchDeps): Promise<Batch
       } else {
         // The same description, company and days submitted twice is researched once.
         const key = fingerprint(parsed.data);
-        const running = inFlight.get(key) ?? runCase(parsed.data, deps, caseTimeoutMs);
+        const sharers = traced.get(key) ?? { ids: [] };
+        traced.set(key, sharers);
+        sharers.ids.push(id);
+        if (sharers.trace) deps.onCaseTrace?.(id, sharers.trace);
+        const onTrace = (trace: RunTrace) => {
+          sharers.trace = trace;
+          for (const sharer of sharers.ids) deps.onCaseTrace?.(sharer, trace);
+        };
+        const running = inFlight.get(key) ?? runCase(parsed.data, { ...deps, onTrace }, caseTimeoutMs);
         inFlight.set(key, running);
         outcome = await running;
       }

@@ -40,7 +40,7 @@ describe("RateLimiter", () => {
 
   it("does not wait forever for a request bigger than the whole token budget", async () => {
     const limiter = new RateLimiter({ requestsPerMinute: 10, tokensPerMinute: 1000 }, fakeClock());
-    await expect(limiter.acquire(5000)).resolves.toBeUndefined();
+    await expect(limiter.acquire(5000)).resolves.toMatchObject({ settle: expect.any(Function) });
   });
 
   it("estimates tokens from prompt length plus a typical answer, not the output ceiling", () => {

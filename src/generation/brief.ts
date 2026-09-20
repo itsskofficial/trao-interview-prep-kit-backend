@@ -32,7 +32,7 @@ export interface BriefResult {
   interviewInsights: string[];
 }
 
-const SYSTEM = `You write a short, factual company brief for someone preparing for an interview there.
+export const SYSTEM = `You write a short, factual company brief for someone preparing for an interview there.
 
 Rules:
 - Use only what the supplied pages and discussion say. If they do not say something, leave it out. Never fill gaps from general knowledge.

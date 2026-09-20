@@ -242,3 +242,51 @@ describe("exporting a kit", () => {
     await bob.get(`/api/kits/${kit.id}/export`).expect(404);
   });
 });
+
+describe("run trace", () => {
+  it("is stored with the job and the kit, returned on request, and left out of lists", async () => {
+    const ada = await api.signedIn();
+    const started = await ada.post("/api/jobs").send(newJob).expect(202);
+    await api.runner.idle();
+
+    const { job } = (await ada.get(`/api/jobs/${started.body.job.id}`).expect(200)).body;
+    expect(job.trace).toMatchObject({ outcome: "ok", totals: { models: ["routed-fake"] } });
+    expect(job.trace.steps.map((step: { step: string }) => step.step)).toContain("coverage");
+
+    const listed = (await ada.get("/api/jobs").expect(200)).body.jobs[0];
+    expect(listed).not.toHaveProperty("trace");
+
+    const { trace } = (await ada.get(`/api/kits/${job.kitId}/trace`).expect(200)).body;
+    expect(trace.totals.llmCalls).toBe(job.trace.totals.llmCalls);
+    expect((await ada.get(`/api/kits/${job.kitId}`).expect(200)).body).not.toHaveProperty("trace");
+  });
+
+  it("keeps the trace of a failed run, and clears it on retry", async () => {
+    const ada = await api.signedIn();
+    failExtraction = true;
+    const started = await ada.post("/api/jobs").send(newJob).expect(202);
+    await api.runner.idle();
+
+    const failed = (await ada.get(`/api/jobs/${started.body.job.id}`).expect(200)).body.job;
+    expect(failed.trace).toMatchObject({ outcome: "failed", steps: [{ step: "extract", status: "failed" }] });
+    expect(failed.trace.llmCalls[0]).toMatchObject({ outcome: "auth", error: "key rejected" });
+
+    failExtraction = false;
+    await ada.post(`/api/jobs/${started.body.job.id}/retry`).expect(202);
+    await api.runner.idle();
+    expect((await ada.get(`/api/jobs/${started.body.job.id}`).expect(200)).body.job.trace).toMatchObject({ outcome: "ok" });
+  });
+
+  it("belongs to the kit's owner only, and is null for a kit made before tracing", async () => {
+    const ada = await api.signedIn();
+    const started = await ada.post("/api/jobs").send(newJob).expect(202);
+    await api.runner.idle();
+    const { kitId } = (await ada.get(`/api/jobs/${started.body.job.id}`).expect(200)).body.job;
+
+    const grace = await api.signedIn();
+    await grace.get(`/api/kits/${kitId}/trace`).expect(404);
+
+    await api.db.kits.updateMany({}, { $unset: { trace: "" } });
+    expect((await ada.get(`/api/kits/${kitId}/trace`).expect(200)).body).toEqual({ trace: null });
+  });
+});

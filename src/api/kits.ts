@@ -18,6 +18,13 @@ export function kitsRouter(kits: KitRepository): Router {
     response.json(kit);
   });
 
+  /** What the run that made this kit did: steps, model calls, fetches. Fetched on demand, never with the kit. */
+  router.get("/:id/trace", async (request, response) => {
+    const found = await kits.trace(userId(response.locals), request.params.id);
+    if (!found) throw ApiError.notFound("Kit");
+    response.json(found);
+  });
+
   /** The kit alone, in exactly the Appendix A structure, as a file. */
   router.get("/:id/export", async (request, response) => {
     const stored = await kits.get(userId(response.locals), request.params.id);

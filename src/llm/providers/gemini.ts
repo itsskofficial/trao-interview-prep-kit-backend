@@ -39,12 +39,20 @@ export function geminiProvider(options: { apiKey: string; model: string; fetchFn
         const deterministic = /SAFETY|RECITATION|MAX_TOKENS|PROHIBITED|BLOCKLIST|SPII|OTHER/.test(reason);
         throw new ProviderError(deterministic ? "bad_request" : "server", `Gemini returned no text (${reason}).`);
       }
-      return { text };
+      const counted = body.usageMetadata;
+      return {
+        text,
+        ...(counted?.promptTokenCount !== undefined
+          ? // Thinking tokens are billed and rate-limited as output, so they are counted as output.
+            { usage: { inputTokens: counted.promptTokenCount, outputTokens: (counted.candidatesTokenCount ?? 0) + (counted.thoughtsTokenCount ?? 0) } }
+          : {}),
+      };
     },
   };
 }
 
 interface GeminiResponse {
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number };
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>;
   promptFeedback?: { blockReason?: string };
 }

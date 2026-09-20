@@ -111,6 +111,16 @@ export const KitSchema = z.object({
   research_log: z.array(ResearchLogEntrySchema).optional(),
   /** Extension: plain-language honesty notes, e.g. a thin description or an unreachable site. */
   notes: z.array(z.string()).optional(),
+  /** Extension: what produced this kit, so output can be compared across prompt and model changes. */
+  generator: z
+    .object({
+      pipeline: z.string(),
+      /** Changes whenever any system prompt changes. */
+      prompts: z.string(),
+      /** The models that actually answered, most used first. Empty when no model call succeeded. */
+      models: z.array(z.string()),
+    })
+    .optional(),
 });
 
 export type RequirementKind = z.infer<typeof RequirementKindSchema>;

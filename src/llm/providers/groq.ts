@@ -31,10 +31,18 @@ export function groqProvider(options: { apiKey: string; model: string; fetchFn?:
 
       if (!response.ok) throw await toProviderError(response);
 
-      const body = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      const body = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
       const text = body.choices?.[0]?.message?.content ?? "";
       if (!text) throw new ProviderError("server", "Groq returned no text.");
-      return { text };
+      return {
+        text,
+        ...(body.usage?.prompt_tokens !== undefined
+          ? { usage: { inputTokens: body.usage.prompt_tokens, outputTokens: body.usage.completion_tokens ?? 0 } }
+          : {}),
+      };
     },
   };
 }

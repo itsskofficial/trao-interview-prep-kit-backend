@@ -5,6 +5,7 @@ import { kitRepository } from "../persistence/kits";
 import type { Database, JobDoc } from "../persistence/mongo";
 import { buildKit, type PipelineDeps, type PipelineInput, type ProgressEvent } from "../pipeline/build-kit";
 import { PipelineError } from "../pipeline/errors";
+import type { RunTrace } from "../trace/trace";
 
 /** The same posting for the same company, however it was pasted. Days are not part of it: a new deadline is not a new kit. */
 export function fingerprintOf(jd: string, companyUrl: string): string {
@@ -61,18 +62,23 @@ export function createJobRunner(db: Database, pipeline: PipelineDeps, concurrenc
         .catch(() => undefined); // losing a progress line must not fail the job
     };
 
+    let trace: RunTrace | undefined;
+    const onTrace = (finished: RunTrace) => {
+      trace = finished;
+    };
+
     try {
-      const kit = await buildKit(input, { ...pipeline, onProgress: recordStep });
+      const kit = await buildKit(input, { ...pipeline, onProgress: recordStep, onTrace });
       await progress;
-      const stored = await kits.create(job.userId, kit, job.fingerprint);
-      await finish(jobId, { status: "succeeded", kitId: new ObjectId(stored.id) });
+      const stored = await kits.create(job.userId, kit, job.fingerprint, trace);
+      await finish(jobId, { status: "succeeded", kitId: new ObjectId(stored.id), trace });
     } catch (error) {
       await progress;
-      await finish(jobId, { status: "failed", error: toCaseError(error) });
+      await finish(jobId, { status: "failed", error: toCaseError(error), trace });
     }
   }
 
-  async function finish(jobId: ObjectId, fields: Pick<JobDoc, "status"> & Partial<Pick<JobDoc, "kitId" | "error">>): Promise<void> {
+  async function finish(jobId: ObjectId, fields: Pick<JobDoc, "status"> & Partial<Pick<JobDoc, "kitId" | "error" | "trace">>): Promise<void> {
     await db.jobs.updateOne({ _id: jobId }, { $set: { ...fields, updatedAt: new Date() }, $unset: { active: "" } });
   }
 
