@@ -13,8 +13,11 @@ const NICE = [
 ];
 
 /** Strong enough to trust on a single line, even under a "nice to have" heading. */
-const MUST_ON_LINE = [/\brequired\b/, /\bmust\b/, /\bessential\b/, /\bmandatory\b/, /\bminimum\b/, // "You don't need to tick every box" is the opposite of a requirement.
-  /(?<!n't |not |never |no )\bneed to\b/, /(?<!n't |not |never )\byou need\b/, /\byou('ll| will) need\b/, /\bneeds to\b/, /\bnon-?negotiables?\b/, /\bmust[- ]haves?\b/];
+const MUST_ON_LINE = [
+  /\brequired\b/, /\bmust\b/, /\bessential\b/, /\bmandatory\b/, /\bminimum\b/, /\bnon-?negotiables?\b/, /\bmust[- ]haves?\b/,
+  // "You don't need to tick every box" is the opposite of a requirement.
+  /(?<!n't |not |never |no )\bneed to\b/, /\byou need\b/, /\byou('ll| will) need\b/, /\bneeds to\b/,
+];
 
 /** Section headings that introduce must-haves. Too loose to apply to an individual line. */
 const MUST_IN_HEADING = [

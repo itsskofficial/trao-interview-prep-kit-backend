@@ -54,9 +54,12 @@ function assign(cases: Case[], proposed: Array<{ evidence: string; priority: Pri
   }
   for (const entry of cases.filter((candidate) => !assigned.has(candidate))) {
     const needle = normalise(entry.evidence);
-    const index = normalised.findIndex((evidence, i) => !used.has(i) && (evidence.includes(needle) || needle.includes(evidence)));
+    // The model may quote more than the case does (the whole line), or a little less (without a trailing clause). A fragment
+    // too short to identify the requirement matches nothing.
+    const overlaps = (evidence: string, wanted: string) => evidence.includes(wanted) || (wanted.includes(evidence) && evidence.length >= wanted.length * 0.6);
+    const index = normalised.findIndex((evidence, i) => !used.has(i) && overlaps(evidence, needle));
     if (index === -1) continue;
-    const contested = cases.some((other) => other !== entry && !assigned.has(other) && normalised[index]!.includes(normalise(other.evidence)));
+    const contested = cases.some((other) => other !== entry && !assigned.has(other) && overlaps(normalised[index]!, normalise(other.evidence)));
     if (contested) continue;
     used.add(index);
     assigned.set(entry, proposed[index]!.priority);
