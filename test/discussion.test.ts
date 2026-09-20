@@ -56,6 +56,10 @@ describe("public discussion search", () => {
     expect(await reasonFor(400)).toContain("probably limiting requests");
     expect(await reasonFor(429)).toContain("probably limiting requests");
     expect(await reasonFor(403)).toContain("the key was not accepted");
+
+    // From a source that does not throttle this way, a 400 is a malformed request and keeps its diagnosis.
+    const hn = fetcherReturning((url) => (url.includes("algolia") ? { ok: false, url, reason: "http_error", detail: "HTTP 400", status: 400 } : json(url, { items: [] })));
+    expect((await createDiscussionSearch(hn)("Initech")).log.find((entry) => entry.source === "hacker-news")!.reason).toBe("http_error: HTTP 400");
   });
 
   it("survives a response that is not the JSON it expected", async () => {
