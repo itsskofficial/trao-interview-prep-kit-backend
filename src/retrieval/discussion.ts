@@ -117,7 +117,7 @@ export function createDiscussionSearch(fetcher: PageFetcher, options: Discussion
         const url = source.url(query);
         const result = await fetcher.fetchPage(url, "json", source.headers || source.body ? { headers: source.headers, ...(source.body ? { jsonBody: source.body(query) } : {}) } : undefined);
         if (!result.ok) {
-          log.push({ source: source.name, outcome: "skipped", reason: `${result.reason}: ${result.detail}` });
+          log.push({ source: source.name, outcome: "skipped", reason: whyUnavailable(source.name, result) });
           return;
         }
 
@@ -145,6 +145,19 @@ export function createDiscussionSearch(fetcher: PageFetcher, options: Discussion
     log.sort((a, b) => a.source.localeCompare(b.source));
     return { snippets, log };
   };
+}
+
+/**
+ * Said the way a person reading the kit would want it. A search service that is limiting requests answers 429, or, in
+ * Stack Exchange's case, 400; either way the honest summary is that it would not answer just now, not "http_error".
+ */
+function whyUnavailable(source: string, result: { reason: string; detail: string; status?: number }): string {
+  // Only Stack Exchange throttles with a 400. From anyone else a 400 means the request was wrong, and that must stay visible.
+  const throttled = result.status === 429 || (result.status === 400 && source === "stack-exchange-workplace");
+  if (result.reason === "http_error" && throttled) return `The service would not answer just now (HTTP ${result.status}); it is probably limiting requests. Regenerate the brief later to try again.`;
+  if (result.reason === "http_error" && (result.status === 401 || result.status === 403)) return `The service refused the request (HTTP ${result.status}); if it needs a key, the key was not accepted.`;
+  if (result.reason === "timeout" || result.reason === "network") return "The service could not be reached.";
+  return `${result.reason}: ${result.detail}`;
 }
 
 function stripTags(html: string): string {
