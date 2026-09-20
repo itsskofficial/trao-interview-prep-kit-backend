@@ -36,8 +36,9 @@ const BatchSchema = z.object({
   fresh: z.boolean().optional(),
 });
 
-function toPublic(job: JobDoc) {
+function toPublic(job: JobDoc, options: { withTrace?: boolean } = {}) {
   return {
+    ...(options.withTrace ? { trace: job.trace ?? null } : {}),
     id: job._id.toHexString(),
     label: job.label,
     status: job.status,
@@ -140,12 +141,13 @@ export function jobsRouter(db: Database, kits: KitRepository, runner: JobRunner,
   });
 
   router.get("/", async (_request, response) => {
-    const jobs = await db.jobs.find({ userId: userId(response.locals) }).sort({ createdAt: -1 }).limit(50).toArray();
-    response.json({ jobs: jobs.map(toPublic) });
+    // A list of fifty jobs does not need fifty traces.
+    const jobs = await db.jobs.find({ userId: userId(response.locals) }, { projection: { trace: 0 } }).sort({ createdAt: -1 }).limit(50).toArray();
+    response.json({ jobs: jobs.map((job) => toPublic(job)) });
   });
 
   router.get("/:id", async (request, response) => {
-    response.json({ job: toPublic(await owned(db, userId(response.locals), request.params.id)) });
+    response.json({ job: toPublic(await owned(db, userId(response.locals), request.params.id), { withTrace: true }) });
   });
 
   router.post("/:id/retry", async (request, response) => {
@@ -162,7 +164,7 @@ export function jobsRouter(db: Database, kits: KitRepository, runner: JobRunner,
     const retried = await db.jobs
       .findOneAndUpdate(
         { _id: job._id, userId: owner, status: job.status },
-        { $set: { status: "queued", active: true, steps: [], updatedAt: new Date() }, $unset: { error: "" } },
+        { $set: { status: "queued", active: true, steps: [], updatedAt: new Date() }, $unset: { error: "", trace: "" } },
         { returnDocument: "after" },
       )
       .catch(async (error: unknown) => {

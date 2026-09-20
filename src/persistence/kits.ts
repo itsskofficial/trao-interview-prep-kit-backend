@@ -3,6 +3,7 @@ import type { BuilderState } from "../builder/operations";
 import type { Kit } from "../kit/schema";
 import { validateKit } from "../kit/validate";
 import type { Progress } from "../practice/leitner";
+import type { RunTrace } from "../trace/trace";
 import type { Database, KitDoc } from "./mongo";
 
 export interface KitSummary {
@@ -39,9 +40,9 @@ export function kitRepository(db: Database) {
     ObjectId.isValid(id) ? { _id: new ObjectId(id), userId } : undefined;
 
   return {
-    async create(userId: ObjectId, kit: Kit, fingerprint: string): Promise<StoredKit> {
+    async create(userId: ObjectId, kit: Kit, fingerprint: string, trace?: RunTrace): Promise<StoredKit> {
       const now = new Date();
-      const doc: KitDoc = { _id: new ObjectId(), userId, kit, fingerprint, counters: highestIds(kit), version: 1, createdAt: now, updatedAt: now };
+      const doc: KitDoc = { _id: new ObjectId(), userId, kit, fingerprint, counters: highestIds(kit), version: 1, ...(trace ? { trace } : {}), createdAt: now, updatedAt: now };
       await db.kits.insertOne(doc);
       return toStored(doc);
     },
@@ -55,6 +56,13 @@ export function kitRepository(db: Database) {
       const filter = owned(userId, id);
       const doc = filter && (await db.kits.findOne(filter));
       return doc ? toStored(doc) : undefined;
+    },
+
+    /** Null for a kit made before runs were traced. */
+    async trace(userId: ObjectId, id: string): Promise<{ trace: RunTrace | null } | undefined> {
+      const filter = owned(userId, id);
+      const doc = filter && (await db.kits.findOne(filter, { projection: { trace: 1 } }));
+      return doc ? { trace: doc.trace ?? null } : undefined;
     },
 
     async practice(userId: ObjectId, id: string): Promise<{ kit: Kit; progress: Progress } | undefined> {

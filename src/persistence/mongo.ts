@@ -3,6 +3,7 @@ import type { CaseError } from "../batch/schema";
 import type { Kit, Question, QuestionCategory } from "../kit/schema";
 import type { ProgressEvent } from "../pipeline/build-kit";
 import type { Progress } from "../practice/leitner";
+import type { RunTrace } from "../trace/trace";
 
 export interface UserDoc {
   _id: ObjectId;
@@ -34,6 +35,8 @@ export interface KitDoc {
   undo?: UndoSnapshot;
   /** Practice state per flashcard id. Kept beside the kit, not in it: it is the user's progress, not part of the kit's content. */
   practice?: Progress;
+  /** What the run that produced this kit did. Beside the kit, not in it: it describes the making, not the kit. */
+  trace?: RunTrace;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -52,6 +55,8 @@ export interface JobDoc {
   active?: true;
   steps: Array<ProgressEvent & { at: Date }>;
   error?: CaseError;
+  /** Kept for failed runs too, which is when it is most wanted. */
+  trace?: RunTrace;
   kitId?: ObjectId;
   /** Jobs created by one file upload share this. */
   batchId?: string;

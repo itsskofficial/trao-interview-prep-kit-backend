@@ -8,6 +8,30 @@ export interface LlmRequest<T> {
   prompt: string;
   schema: z.ZodType<T>;
   maxOutputTokens?: number;
+  /** Told about every HTTP call made for this request, whatever its outcome. This is what a run trace is built from. */
+  onCall?: (record: LlmCallRecord) => void;
+}
+
+/** Tokens as the provider counted them, not as we estimated them. */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** One HTTP call to one provider. Never holds prompt or answer text: a trace is safe to store and to show. */
+export interface LlmCallRecord {
+  step: string;
+  provider: string;
+  /** 1 for the first try on this provider, 2 for the first retry, and so on. */
+  attempt: number;
+  /** "repair" is the second ask, made after the first answer failed validation. */
+  kind: "answer" | "repair";
+  outcome: "ok" | "invalid_output" | ProviderErrorKind;
+  /** Time spent waiting for room in the rate limiter before the call was sent. */
+  queuedMs: number;
+  latencyMs: number;
+  usage?: TokenUsage;
+  error?: string;
 }
 
 export interface LlmClient {
@@ -23,6 +47,7 @@ export interface ProviderRequest {
 
 export interface ProviderResponse {
   text: string;
+  usage?: TokenUsage;
 }
 
 /** One model behind one API. Providers translate HTTP failures into ProviderError and nothing else. */

@@ -12,7 +12,9 @@ import { crawlCompanySite, type CrawledPage, type SiteCrawl } from "../retrieval
 import { createDiscussionSearch, type DiscussionResult, type DiscussionSearch } from "../retrieval/discussion";
 import type { PageFetcher } from "../retrieval/fetcher";
 import { allocateSchedule } from "../scheduling/allocate";
+import { createTraceRecorder, tracedFetcher, type RunTrace, type TraceRecorder } from "../trace/trace";
 import { PipelineError } from "./errors";
+import { PIPELINE_VERSION, promptFingerprint } from "./generator";
 
 export interface PipelineInput {
   jd: string;
@@ -37,6 +39,8 @@ export interface PipelineDeps {
   onProgress?: (event: ProgressEvent) => void;
   /** Set when the caller has given up on this kit (a batch case past its time budget). No further model call is started. */
   signal?: AbortSignal;
+  /** Given the run's trace when the run ends, whether it produced a kit or not. */
+  onTrace?: (trace: RunTrace) => void;
 }
 
 /**
@@ -46,16 +50,46 @@ export interface PipelineDeps {
  * Each step uses what the previous ones actually found. Only extraction can
  * fail the whole kit: after it, a step that fails costs its own section and
  * leaves a note, and coverage is guaranteed by code either way.
+ *
+ * The model client and the fetcher are shared between runs, so what this run
+ * did with them is recorded here, by wrapping both for the length of the run.
  */
 export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promise<Kit> {
-  const { fetcher, now = () => new Date(), onProgress = () => undefined } = deps;
-  // An abandoned kit must not keep queueing calls on the shared rate limiter ahead of the kits still wanted.
-  const llm: LlmClient = {
-    generate: (request) => {
-      deps.signal?.throwIfAborted();
-      return deps.llm.generate(request);
+  const trace = createTraceRecorder();
+  const traced: PipelineDeps = {
+    ...deps,
+    fetcher: tracedFetcher(deps.fetcher, trace),
+    llm: {
+      generate: (request) => {
+        // An abandoned kit must not keep queueing calls on the shared rate limiter ahead of the kits still wanted.
+        deps.signal?.throwIfAborted();
+        return deps.llm.generate({
+          ...request,
+          onCall: (record) => {
+            trace.llmCall(record);
+            request.onCall?.(record);
+          },
+        });
+      },
+    },
+    onProgress: (event) => {
+      trace.step(event);
+      deps.onProgress?.(event);
     },
   };
+
+  try {
+    const kit = await runPipeline(input, traced, trace);
+    deps.onTrace?.(trace.finish("ok"));
+    return kit;
+  } catch (error) {
+    deps.onTrace?.(trace.finish("failed", errorMessage(error)));
+    throw error;
+  }
+}
+
+async function runPipeline(input: PipelineInput, deps: PipelineDeps, trace: TraceRecorder): Promise<Kit> {
+  const { fetcher, llm, now = () => new Date(), onProgress = () => undefined } = deps;
   const searchDiscussion = deps.searchDiscussion ?? createDiscussionSearch(fetcher);
   const notes: string[] = [];
 
@@ -212,6 +246,7 @@ export async function buildKit(input: PipelineInput, deps: PipelineDeps): Promis
     interview_insights: researched.interviewInsights,
     research_log: [...crawl.log, ...discussionLog],
     notes,
+    generator: { pipeline: PIPELINE_VERSION, prompts: promptFingerprint(), models: trace.models() },
   };
 
   // 9. Nothing leaves the pipeline without passing the structure check.

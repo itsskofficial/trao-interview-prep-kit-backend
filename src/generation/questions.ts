@@ -22,7 +22,7 @@ export interface QuestionContext {
 }
 
 /** Each category is a different interview, so each gets its own instructions and its own call. */
-const CATEGORY_BRIEF: Record<QuestionCategory, string> = {
+export const CATEGORY_BRIEF: Record<QuestionCategory, string> = {
   technical:
     "You write technical interview questions. Each question tests whether the candidate can actually do what a requirement names: " +
     "how something works, how they would debug it, what trade-off they would make. Prefer concrete scenarios over definitions.",
@@ -36,7 +36,7 @@ const CATEGORY_BRIEF: Record<QuestionCategory, string> = {
     "You write company-fit interview questions: motivation for this company and role, and how the candidate's way of working matches what the company says about itself.",
 };
 
-const SHARED_RULES = `Rules:
+export const SHARED_RULES = `Rules:
 - Use only the requirement ids you are given. Every question lists the ids of the requirements it covers; use an empty list only if it covers none of them.
 - Every listed requirement must be covered by at least one question.
 - "difficulty" is 1 (warm-up), 2 (standard) or 3 (hard).

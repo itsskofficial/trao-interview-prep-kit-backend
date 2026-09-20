@@ -12,6 +12,11 @@ export interface RateLimits {
  * tokens per minute as well as requests, so both are counted before a call is
  * sent rather than discovered from a 429. Callers queue in arrival order.
  */
+export interface Reservation {
+  /** Replaces the estimate with what the provider actually counted, for as long as the call stays in the window. */
+  settle(actualTokens: number): void;
+}
+
 export class RateLimiter {
   private events: Array<{ at: number; tokens: number }> = [];
   private queue: Promise<void> = Promise.resolve();
@@ -21,15 +26,18 @@ export class RateLimiter {
     private readonly clock: Clock = systemClock,
   ) {}
 
-  acquire(estimatedTokens: number): Promise<void> {
+  acquire(estimatedTokens: number): Promise<Reservation> {
     // A single request larger than the whole budget would otherwise wait forever.
     const tokens = Math.min(estimatedTokens, this.limits.tokensPerMinute);
     const turn = this.queue.then(() => this.waitForRoom(tokens));
-    this.queue = turn.catch(() => undefined);
+    this.queue = turn.then(
+      () => undefined,
+      () => undefined,
+    );
     return turn;
   }
 
-  private async waitForRoom(tokens: number): Promise<void> {
+  private async waitForRoom(tokens: number): Promise<Reservation> {
     for (;;) {
       const now = this.clock.now();
       this.events = this.events.filter((event) => now - event.at < WINDOW_MS);
@@ -38,8 +46,13 @@ export class RateLimiter {
       const hasRoom =
         this.events.length < this.limits.requestsPerMinute && usedTokens + tokens <= this.limits.tokensPerMinute;
       if (hasRoom) {
-        this.events.push({ at: now, tokens });
-        return;
+        const event = { at: now, tokens };
+        this.events.push(event);
+        return {
+          settle: (actualTokens) => {
+            event.tokens = Math.min(Math.max(0, Math.round(actualTokens)), this.limits.tokensPerMinute);
+          },
+        };
       }
       // Room can only appear when the oldest event leaves the window.
       await this.clock.sleep(this.events[0]!.at + WINDOW_MS - now + 1);
@@ -55,5 +68,9 @@ const TYPICAL_OUTPUT_TOKENS = 1_500;
  * ceiling instead would let a provider with a small per-minute budget make one call a minute.
  */
 export function estimateTokens(text: string, maxOutputTokens: number): number {
-  return Math.ceil(text.length / 4) + Math.min(maxOutputTokens, TYPICAL_OUTPUT_TOKENS);
+  return estimatePromptTokens(text) + Math.min(maxOutputTokens, TYPICAL_OUTPUT_TOKENS);
+}
+
+export function estimatePromptTokens(text: string): number {
+  return Math.ceil(text.length / 4);
 }

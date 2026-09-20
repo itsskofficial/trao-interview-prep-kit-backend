@@ -45,7 +45,9 @@ describe("registration and sign-in", () => {
 
     const wrong = await request(api.app).post("/api/auth/login").send({ ...credentials, password: "wrong password!" }).expect(401);
     const unknown = await request(api.app).post("/api/auth/login").send({ email: "nobody@example.com", password: "whatever123" }).expect(401);
-    expect(wrong.body).toEqual(unknown.body);
+    // Identical apart from the id of the request itself, which is how either failure would be found in the log.
+    const withoutId = ({ error: { requestId: _id, ...rest } }: { error: Record<string, unknown> }) => rest;
+    expect(withoutId(wrong.body)).toEqual(withoutId(unknown.body));
     expect(wrong.body.error.code).toBe("INVALID_CREDENTIALS");
   });
 
@@ -116,13 +118,13 @@ describe("kit ownership", () => {
 describe("errors", () => {
   it("uses the same error shape for unknown routes, malformed JSON and oversized bodies", async () => {
     const unknown = await request(api.app).get("/api/nope").expect(404);
-    expect(unknown.body).toEqual({ error: { code: "NOT_FOUND", message: "No route for GET /api/nope." } });
+    expect(unknown.body).toEqual({ error: { code: "NOT_FOUND", message: "No route for GET /api/nope.", requestId: unknown.headers["x-request-id"] } });
 
     const malformed = await request(api.app).post("/api/auth/login").set("Content-Type", "application/json").send("{oops").expect(400);
-    expect(malformed.body.error.code).toBe("MALFORMED_JSON");
+    expect(malformed.body.error).toMatchObject({ code: "MALFORMED_JSON", requestId: malformed.headers["x-request-id"] });
 
     const huge = await request(api.app).post("/api/auth/login").send({ email: "a@b.co", password: "x".repeat(2_000_000) }).expect(413);
-    expect(huge.body.error.code).toBe("PAYLOAD_TOO_LARGE");
+    expect(huge.body.error).toMatchObject({ code: "PAYLOAD_TOO_LARGE", requestId: huge.headers["x-request-id"] });
   });
 
   it("reports health without a session", async () => {

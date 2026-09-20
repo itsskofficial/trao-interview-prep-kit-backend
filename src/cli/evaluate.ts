@@ -6,11 +6,12 @@ import { BatchInputSchema, type BatchOutput } from "../batch/schema";
 import { allowsPrivateUrls, caseTimeoutMs, loadConfig, loadEnvFile } from "../config";
 import { createLlmClientFromConfig } from "../llm";
 import { createPageFetcher } from "../retrieval/fetcher";
+import type { RunTrace } from "../trace/trace";
 
-const USAGE = "Usage: npm run evaluate -- --input <cases.json> --output <kits.json>";
+const USAGE = "Usage: npm run evaluate -- --input <cases.json> --output <kits.json> [--trace <trace.json>]";
 
 async function main(): Promise<number> {
-  const { values } = parseArgs({ options: { input: { type: "string" }, output: { type: "string" } } });
+  const { values } = parseArgs({ options: { input: { type: "string" }, output: { type: "string" }, trace: { type: "string" } } });
   if (!values.input || !values.output) {
     console.error(USAGE);
     return 2;
@@ -38,9 +39,27 @@ async function main(): Promise<number> {
   const target = path.resolve(values.output);
   await mkdir(path.dirname(target), { recursive: true });
   // Written to a temporary file and renamed, so a crash never leaves a half-written result.
-  const write = async (output: BatchOutput) => {
-    await writeFile(`${target}.tmp`, `${JSON.stringify(output, null, 2)}\n`, "utf8");
-    await rename(`${target}.tmp`, target);
+  // Cases finish on separate workers, sometimes together. Writes are queued so that two never share the
+  // temporary file, and so that an older snapshot can never land on top of a newer one.
+  let writing: Promise<void> = Promise.resolve();
+  const writeJson = (file: string, value: unknown): Promise<void> => {
+    const text = `${JSON.stringify(value, null, 2)}\n`;
+    writing = writing
+      .catch(() => undefined)
+      .then(async () => {
+        await writeFile(`${file}.tmp`, text, "utf8");
+        await rename(`${file}.tmp`, file);
+      });
+    return writing;
+  };
+  const write = (output: BatchOutput) => writeJson(target, output);
+
+  // The graded file stays exactly what it was. What each run did goes to its own file, and only when asked for.
+  const traces = new Map<string, RunTrace>();
+  const traceTarget = values.trace ? path.resolve(values.trace) : undefined;
+  if (traceTarget) await mkdir(path.dirname(traceTarget), { recursive: true });
+  const writeTraces = async () => {
+    if (traceTarget) await writeJson(traceTarget, { version: "1.0", traces: [...traces].map(([id, trace]) => ({ id, trace })) });
   };
   const output = await runBatch(cases, {
     llm,
@@ -49,14 +68,31 @@ async function main(): Promise<number> {
     caseTimeoutMs: caseTimeoutMs(config),
     log: (line) => console.error(line),
     // The file is rewritten after every case, so a run stopped early still leaves what it finished.
-    onPartial: (finished) => write({ version: "1.0", generated_at: new Date().toISOString(), kits: finished }),
+    onPartial: async (finished) => {
+      await write({ version: "1.0", generated_at: new Date().toISOString(), kits: finished });
+      await writeTraces();
+    },
+    onCaseTrace: (id, trace) => traces.set(id, trace),
   }).finally(() => fetcher.close());
 
   await write(output);
+  await writeTraces();
+  console.error(summarise([...traces.values()]));
 
   const ok = output.kits.filter((kit) => kit.status === "ok").length;
   console.error(`Wrote ${target}: ${ok} ok, ${output.kits.length - ok} failed.`);
   return 0;
+}
+
+/** One line on what the run cost, so rate-limit trouble is visible without opening a file. */
+function summarise(traces: RunTrace[]): string {
+  const total = (pick: (trace: RunTrace) => number) => traces.reduce((sum, trace) => sum + pick(trace), 0);
+  const models = [...new Set(traces.flatMap((trace) => trace.totals.models))].join(", ") || "none";
+  return (
+    `Model calls: ${total((t) => t.totals.llmCalls)} (${total((t) => t.totals.retries)} retried, ${total((t) => t.totals.repairs)} repaired, ${total((t) => t.totals.failovers)} failed over), ` +
+    `tokens in/out: ${total((t) => t.totals.inputTokens)}/${total((t) => t.totals.outputTokens)}, ` +
+    `pages fetched: ${total((t) => t.totals.fetches)}, answered by: ${models}.`
+  );
 }
 
 main().then(

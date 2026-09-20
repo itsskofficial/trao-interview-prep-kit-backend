@@ -1,9 +1,10 @@
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import { ZodError, type z } from "zod";
+import type { Logger } from "../logging/logger";
 
 /** Every error the API returns has this shape, so the interface can show something useful. */
 export interface ErrorBody {
-  error: { code: string; message: string; details?: unknown };
+  error: { code: string; message: string; details?: unknown; requestId?: string };
 }
 
 export class ApiError extends Error {
@@ -38,18 +39,22 @@ export const notFoundHandler: RequestHandler = (request, _response, next) => {
   next(new ApiError(404, "NOT_FOUND", `No route for ${request.method} ${request.path}.`));
 };
 
-export const errorHandler: ErrorRequestHandler = (error, _request, response, _next) => {
+export const errorHandler = (logger: Logger): ErrorRequestHandler => (error, request, response, _next) => {
+  // On every error body, so whatever a user reports can be found in the log.
+  const requestId = response.locals.requestId as string | undefined;
+  const withId = (body: ErrorBody["error"]): ErrorBody => ({ error: { ...body, ...(requestId ? { requestId } : {}) } });
+
   if (error instanceof ApiError) {
-    const body: ErrorBody = { error: { code: error.code, message: error.message, ...(error.details !== undefined ? { details: error.details } : {}) } };
-    return void response.status(error.status).json(body);
+    return void response.status(error.status).json(withId({ code: error.code, message: error.message, ...(error.details !== undefined ? { details: error.details } : {}) }));
   }
   // body-parser failures: malformed JSON or a body over the size limit
   const status = (error as { status?: number }).status;
   if (status === 400 || status === 413) {
     const code = status === 413 ? "PAYLOAD_TOO_LARGE" : "MALFORMED_JSON";
-    return void response.status(status).json({ error: { code, message: status === 413 ? "The request body is too large." : "The request body is not valid JSON." } });
+    return void response.status(status).json(withId({ code, message: status === 413 ? "The request body is too large." : "The request body is not valid JSON." }));
   }
 
-  console.error(error);
-  response.status(500).json({ error: { code: "INTERNAL", message: "Something went wrong on our side." } });
+  // The one case worth a stack trace. The id ties this line to the request line, and to what the user was shown.
+  logger.error({ requestId, method: request.method, path: request.originalUrl.split("?")[0], err: error }, "unhandled error");
+  response.status(500).json(withId({ code: "INTERNAL", message: "Something went wrong on our side." }));
 };

@@ -44,7 +44,7 @@ export class EmptyDescriptionError extends Error {
   }
 }
 
-const SYSTEM = `You read one job description and report what it says. You never add to it.
+export const SYSTEM = `You read one job description and report what it says. You never add to it.
 
 Rules:
 - A requirement is a skill, experience, qualification or trait the posting asks the candidate to have.

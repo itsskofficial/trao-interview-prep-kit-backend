@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { parseModelJson } from "./json";
-import { estimateTokens, type RateLimiter } from "./rate-limiter";
+import { estimatePromptTokens, estimateTokens, type RateLimiter } from "./rate-limiter";
 import {
   LlmError,
   ProviderError,
   systemClock,
   type Clock,
+  type LlmCallRecord,
   type LlmClient,
   type LlmProvider,
   type LlmRequest,
@@ -49,14 +50,35 @@ export function createLlmClient(options: LlmClientOptions): LlmClient {
     onEvent = () => undefined,
   } = options;
 
-  async function callWithRetry(slot: ProviderSlot, step: string, request: ProviderRequest): Promise<string> {
+  /** One validated answer from one provider, retrying what is worth retrying. Every HTTP call is reported to `call.report`. */
+  async function callWithRetry<T>(slot: ProviderSlot, call: Call<T>, request: ProviderRequest): Promise<Checked<T>> {
+    const { step } = call;
+    const promptText = request.system + request.prompt;
     for (let attempt = 0; ; attempt++) {
-      await slot.limiter.acquire(estimateTokens(request.system + request.prompt, request.maxOutputTokens));
+      const queuedAt = clock.now();
+      const reservation = await slot.limiter.acquire(estimateTokens(promptText, request.maxOutputTokens));
+      const sentAt = clock.now();
+      // Observers are told, never obeyed: one that throws must not turn a good answer into a retried "network" failure.
+      const record = (fields: Pick<LlmCallRecord, "outcome" | "usage" | "error">): void => {
+        try {
+          call.report({ step, provider: slot.provider.name, attempt: attempt + 1, kind: call.kind, queuedMs: sentAt - queuedAt, latencyMs: clock.now() - sentAt, ...fields });
+        } catch {
+          // nothing useful can be done with a broken observer from here
+        }
+      };
+
       try {
         const response = await slot.provider.complete(request, AbortSignal.timeout(timeoutMs));
-        return response.text;
+        // The estimate was a guess made before the call; what the provider counted is what its limit is charged.
+        if (response.usage) reservation.settle(response.usage.inputTokens + response.usage.outputTokens);
+        const checked = check(call.schema, response.text);
+        record({ outcome: checked.ok ? "ok" : "invalid_output", usage: response.usage, ...(checked.ok ? {} : { error: firstLine(checked.issues) }) });
+        return checked;
       } catch (error) {
         const failure = toProviderError(error);
+        // No answer was produced, so only the prompt can have been counted.
+        reservation.settle(estimatePromptTokens(promptText));
+        record({ outcome: failure.kind, error: firstLine(failure.message) });
         if (!failure.retryable || attempt >= maxRetries) throw failure;
 
         // The provider's own Retry-After wins; otherwise exponential backoff with jitter.
@@ -76,13 +98,14 @@ export function createLlmClient(options: LlmClientOptions): LlmClient {
       maxOutputTokens: request.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
     };
 
-    const first = check(request.schema, await callWithRetry(slot, request.step, base));
+    const report = request.onCall ?? (() => undefined);
+    const first = await callWithRetry(slot, { step: request.step, kind: "answer", schema: request.schema, report }, base);
     if (first.ok) return first.value;
 
     // One repair attempt: show the model exactly what was wrong with its answer.
     onEvent({ type: "repair", step: request.step, provider: slot.provider.name, issues: first.issues });
     const repairPrompt = `${request.prompt}\n\nYour previous answer was rejected:\n${first.issues}\nAnswer again with valid JSON that matches the schema exactly, and nothing else.`;
-    const second = check(request.schema, await callWithRetry(slot, request.step, { ...base, prompt: repairPrompt }));
+    const second = await callWithRetry(slot, { step: request.step, kind: "repair", schema: request.schema, report }, { ...base, prompt: repairPrompt });
     if (second.ok) return second.value;
 
     throw new LlmError("LLM_INVALID_OUTPUT", `${request.step}: model output was invalid twice. ${second.issues}`);
@@ -105,7 +128,33 @@ export function createLlmClient(options: LlmClientOptions): LlmClient {
   };
 }
 
-function check<T>(schema: z.ZodType<T>, text: string): { ok: true; value: T } | { ok: false; issues: string } {
+type Checked<T> = { ok: true; value: T } | { ok: false; issues: string };
+
+interface Call<T> {
+  step: string;
+  kind: LlmCallRecord["kind"];
+  schema: z.ZodType<T>;
+  report: (record: LlmCallRecord) => void;
+}
+
+/** Error text in a trace is one short line: enough to see what happened, never a dump of what the provider sent back. */
+function firstLine(message: string): string {
+  return scrubSecrets(message.split("\n")[0]!).slice(0, 200);
+}
+
+/**
+ * Keys travel in headers and are never put in a message by this code, but a trace is stored and shown,
+ * and an upstream error can quote anything. Whatever looks like a credential is removed on the way in.
+ */
+export function scrubSecrets(text: string): string {
+  return text
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 [redacted]")
+    .replace(/\b(AIza[0-9A-Za-z_-]{20,}|gsk_[0-9A-Za-z]{20,}|sk-[0-9A-Za-z_-]{20,})/g, "[redacted]")
+    .replace(/([?&](?:key|api_key|apikey|token|access_token)=)[^&\s]+/gi, "$1[redacted]")
+    .replace(/\/\/[^/\s:@]+:[^/\s@]+@/g, "//[redacted]@");
+}
+
+function check<T>(schema: z.ZodType<T>, text: string): Checked<T> {
   const json = parseModelJson(text);
   if (!json.ok) return { ok: false, issues: json.error };
 
