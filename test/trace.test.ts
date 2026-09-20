@@ -79,6 +79,20 @@ describe("what the model client reports about each call", () => {
     expect(records[1]!.latencyMs).toBe(700);
   });
 
+  it("is not thrown off by an observer that throws: the answer stands and nothing is retried", async () => {
+    const provider = fakeProvider([{ fruits: ["fig"] }]);
+    const answer = await fakeLlmClient([provider]).generate(ask(() => { throw new Error("observer bug"); }));
+    expect(answer).toEqual({ fruits: ["fig"] });
+    expect(provider.requests).toHaveLength(1);
+  });
+
+  it("removes anything that looks like a credential from error text before it can be stored", async () => {
+    const records: LlmCallRecord[] = [];
+    const leaky = new ProviderError("bad_request", "Upstream said: Bearer abcdef1234567890 rejected for https://user:pass@host/v1?key=AIzaSyA1234567890abcdefghij_KLMN");
+    await fakeLlmClient([fakeProvider([leaky])]).generate(ask((record) => records.push(record))).catch(() => undefined);
+    expect(records[0]!.error).toBe("Upstream said: Bearer [redacted] rejected for https://[redacted]@host/v1?key=[redacted]");
+  });
+
   it("keeps error text to one short line", async () => {
     const records: LlmCallRecord[] = [];
     const noisy = new ProviderError("bad_request", `Gemini 400: bad schema\n${"x".repeat(5_000)}`);
@@ -157,10 +171,16 @@ describe("trace recorder", () => {
     });
   });
 
-  it("stops growing rather than becoming too large to store", () => {
+  it("stops growing rather than becoming too large to store, while its totals stay true", () => {
     const trace = createTraceRecorder(() => 0);
     for (let i = 0; i < 2_000; i++) trace.decision("x", `decision ${i}`);
-    expect(trace.finish("ok").decisions).toHaveLength(500);
+    for (let i = 0; i < 700; i++) trace.llmCall({ step: `s${i}`, provider: i < 650 ? "early" : "late", attempt: 1, kind: "answer", outcome: "ok", queuedMs: 0, latencyMs: 2, usage: { inputTokens: 1, outputTokens: 1 } });
+    for (let i = 0; i < 600; i++) trace.fetch({ url: "https://x.test/", accept: "html", outcome: "ok", durationMs: 1, chars: 10 });
+
+    const finished = trace.finish("ok");
+    expect(finished.decisions).toHaveLength(500);
+    expect(finished.llmCalls).toHaveLength(500);
+    expect(finished.totals).toMatchObject({ llmCalls: 700, llmMs: 1400, inputTokens: 700, fetches: 600, pagesRead: 600, models: ["early", "late"] });
   });
 });
 
@@ -181,6 +201,21 @@ describe("traced fetcher", () => {
       { url: "https://example.com/missing", accept: "html", outcome: "http_error", status: 404, chars: 0 },
       { url: "https://search.example/api?…", accept: "json", outcome: "ok", status: 200, chars: 12 },
     ]);
+  });
+
+  it("stores where a fetch went without credentials, query or fragment", async () => {
+    const inner: PageFetcher = { fetchPage: async (url) => ({ ok: false, url, reason: "invalid_url", detail: "" }), close: async () => undefined };
+    const trace = createTraceRecorder(() => 0);
+    await tracedFetcher(inner, trace, () => 0).fetchPage("https://ada:hunter2@example.com/careers/how-we-hire?utm=x#stages");
+    await tracedFetcher(inner, trace, () => 0).fetchPage("not a url");
+    expect(trace.finish("ok").fetches.map((fetch) => fetch.url)).toEqual(["https://example.com/careers/how-we-hire?…", "[unparseable address]"]);
+  });
+
+  it("records a fetch that threw, and lets the error through", async () => {
+    const inner: PageFetcher = { fetchPage: async () => { throw new Error("socket exploded"); }, close: async () => undefined };
+    const trace = createTraceRecorder(() => 0);
+    await expect(tracedFetcher(inner, trace, () => 0).fetchPage("https://example.com/a")).rejects.toThrow("socket exploded");
+    expect(trace.finish("ok").fetches).toEqual([expect.objectContaining({ url: "https://example.com/a", outcome: "network", chars: 0 })]);
   });
 
   it("does not close the shared fetcher", async () => {
@@ -258,6 +293,27 @@ describe("a traced run", () => {
     const same = { jd: JD, company_url: `${site.origin}/acme/`, days: 3 };
     await runBatch([{ id: "a", ...same }, { id: "b", ...same }, { id: "bad" }], { llm: model.llm, fetcher, searchDiscussion: noDiscussion, onCaseTrace: (id) => seen.push(id) });
     expect(seen.sort()).toEqual(["a", "b"]);
+  });
+});
+
+describe("a batch case that ran out of time", () => {
+  it("still hands over its trace, which shows where it was when it was stopped", async () => {
+    // A model call that is still in flight when the case is given up on, and fails a moment later, as a cancelled request would.
+    let release: () => void = () => undefined;
+    const slow = { generate: () => new Promise<never>((_, reject) => (release = () => reject(new Error("stopped")))) };
+    const seen: Array<{ id: string; outcome: string }> = [];
+    const batch = runBatch([{ id: "slow", jd: "Engineer. Requirements: Go", company_url: "https://acme.example/", days: 2 }], {
+      llm: slow,
+      fetcher: { fetchPage: async (url) => ({ ok: false, url, reason: "network", detail: "" }), close: async () => undefined },
+      caseTimeoutMs: 30,
+      abandonGraceMs: 2_000,
+      onCaseTrace: (id, trace) => seen.push({ id, outcome: trace.outcome }),
+    });
+    setTimeout(() => release(), 80);
+    const output = await batch;
+
+    expect(output.kits[0]).toMatchObject({ id: "slow", status: "failed", error: { code: "TIMEOUT" } });
+    expect(seen).toEqual([{ id: "slow", outcome: "failed" }]);
   });
 });
 

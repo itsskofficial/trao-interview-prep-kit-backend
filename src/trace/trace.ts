@@ -96,16 +96,17 @@ export function createTraceRecorder(now: () => number = Date.now): TraceRecorder
   const llmCalls: LlmCallTrace[] = [];
   const fetches: FetchTrace[] = [];
   const decisions: DecisionTrace[] = [];
-  // A trace is a diagnostic, not a log of record: a run that somehow makes thousands of calls must not make a document too big to store.
+  // A trace is a diagnostic, not a log of record: a run that somehow makes thousands of calls must not make a document too big
+  // to store. The detail stops growing; the totals below are counted as things happen, so they stay true whatever was kept.
   const keep = <T>(list: T[], entry: T) => {
     if (list.length < MAX_ENTRIES) list.push(entry);
   };
+  const totals = { llmCalls: 0, llmMs: 0, queuedMs: 0, inputTokens: 0, outputTokens: 0, retries: 0, repairs: 0, failovers: 0, fetches: 0, fetchMs: 0, pagesRead: 0 };
+  const answered = new Map<string, number>();
+  /** Per step: which providers failed before one answered, to count failovers. */
+  const failedOn = new Map<string, Set<string>>();
 
-  const models = (): string[] => {
-    const counts = new Map<string, number>();
-    for (const call of llmCalls) if (call.outcome === "ok") counts.set(call.provider, (counts.get(call.provider) ?? 0) + 1);
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([provider]) => provider);
-  };
+  const models = (): string[] => [...answered.entries()].sort((a, b) => b[1] - a[1]).map(([provider]) => provider);
 
   return {
     step(event) {
@@ -119,10 +120,31 @@ export function createTraceRecorder(now: () => number = Date.now): TraceRecorder
     },
 
     llmCall(record) {
+      totals.llmCalls++;
+      totals.llmMs += record.latencyMs;
+      totals.queuedMs += record.queuedMs;
+      totals.inputTokens += record.usage?.inputTokens ?? 0;
+      totals.outputTokens += record.usage?.outputTokens ?? 0;
+      if (record.attempt > 1) totals.retries++;
+      if (record.kind === "repair" && record.attempt === 1) totals.repairs++;
+
+      const failed = failedOn.get(record.step) ?? new Set<string>();
+      failedOn.set(record.step, failed);
+      if (record.outcome === "ok") {
+        answered.set(record.provider, (answered.get(record.provider) ?? 0) + 1);
+        // Answered by one provider after another gave up on the same step.
+        if ([...failed].some((provider) => provider !== record.provider)) totals.failovers++;
+        failed.clear();
+      } else if (record.outcome !== "invalid_output") {
+        failed.add(record.provider);
+      }
       keep(llmCalls, { ...record, atMs: Math.max(0, since() - record.latencyMs - record.queuedMs) });
     },
 
     fetch(record) {
+      totals.fetches++;
+      totals.fetchMs += record.durationMs;
+      if (record.outcome === "ok" && record.accept === "html") totals.pagesRead++;
       keep(fetches, { ...record, atMs: Math.max(0, since() - record.durationMs) });
     },
 
@@ -137,18 +159,6 @@ export function createTraceRecorder(now: () => number = Date.now): TraceRecorder
       for (const [step, atMs] of open) steps.push({ step, status: "unfinished", atMs, durationMs: since() - atMs });
       open.clear();
 
-      const sum = <T>(list: T[], pick: (entry: T) => number) => list.reduce((total, entry) => total + pick(entry), 0);
-      const accepted = new Set<string>();
-      let failovers = 0;
-      for (const call of llmCalls) {
-        // A step answered by a second provider after the first gave up is a failover.
-        const key = call.step;
-        if (call.outcome === "ok" && !accepted.has(key)) {
-          accepted.add(key);
-          if (llmCalls.some((earlier) => earlier.step === key && earlier.provider !== call.provider && earlier.atMs <= call.atMs && earlier.outcome !== "ok")) failovers++;
-        }
-      }
-
       return {
         startedAt: new Date(startedAt).toISOString(),
         finishedAt: new Date(now()).toISOString(),
@@ -159,20 +169,7 @@ export function createTraceRecorder(now: () => number = Date.now): TraceRecorder
         llmCalls,
         fetches,
         decisions,
-        totals: {
-          llmCalls: llmCalls.length,
-          llmMs: sum(llmCalls, (call) => call.latencyMs),
-          queuedMs: sum(llmCalls, (call) => call.queuedMs),
-          inputTokens: sum(llmCalls, (call) => call.usage?.inputTokens ?? 0),
-          outputTokens: sum(llmCalls, (call) => call.usage?.outputTokens ?? 0),
-          retries: llmCalls.filter((call) => call.attempt > 1).length,
-          repairs: llmCalls.filter((call) => call.kind === "repair" && call.attempt === 1).length,
-          failovers,
-          fetches: fetches.length,
-          fetchMs: sum(fetches, (fetch) => fetch.durationMs),
-          pagesRead: fetches.filter((fetch) => fetch.outcome === "ok" && fetch.accept === "html").length,
-          models: models(),
-        },
+        totals: { ...totals, models: models() },
       };
     },
   };
@@ -183,9 +180,13 @@ export function tracedFetcher(fetcher: PageFetcher, recorder: Pick<TraceRecorder
   return {
     async fetchPage(url: string, accept: Accept = "html"): Promise<FetchResult> {
       const startedAt = now();
-      const result = await fetcher.fetchPage(url, accept);
+      // The fetcher's contract is never to throw. Should it ever, the run still learns that a fetch was tried and failed.
+      const result = await fetcher.fetchPage(url, accept).catch((error: unknown) => {
+        recorder.fetch({ url: safeAddress(url), accept, outcome: "network", durationMs: now() - startedAt, chars: 0 });
+        throw error;
+      });
       recorder.fetch({
-        url: withoutQuery(result.url || url),
+        url: safeAddress(result.url || url),
         accept,
         outcome: result.ok ? "ok" : result.reason,
         ...(result.status !== undefined ? { status: result.status } : {}),
@@ -199,8 +200,16 @@ export function tracedFetcher(fetcher: PageFetcher, recorder: Pick<TraceRecorder
   };
 }
 
-/** Search APIs take the company name in the query string; a trace says which service was asked, not what for. */
-function withoutQuery(url: string): string {
-  const at = url.indexOf("?");
-  return at === -1 ? url : `${url.slice(0, at)}?…`;
+/**
+ * Where a fetch went, as far as a stored trace should say: origin and path. The path stays because which
+ * page was read is the point of the trace, and the same addresses are already in the kit's research log.
+ * Credentials, the query string (search APIs carry the company name there) and the fragment do not.
+ */
+export function safeAddress(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}${parsed.search ? "?…" : ""}`;
+  } catch {
+    return "[unparseable address]";
+  }
 }

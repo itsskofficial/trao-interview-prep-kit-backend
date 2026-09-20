@@ -40,9 +40,18 @@ async function main(): Promise<number> {
   const target = path.resolve(values.output);
   await mkdir(path.dirname(target), { recursive: true });
   // Written to a temporary file and renamed, so a crash never leaves a half-written result.
-  const writeJson = async (file: string, value: unknown) => {
-    await writeFile(`${file}.tmp`, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-    await rename(`${file}.tmp`, file);
+  // Cases finish on separate workers, sometimes together. Writes are queued so that two never share the
+  // temporary file, and so that an older snapshot can never land on top of a newer one.
+  let writing: Promise<void> = Promise.resolve();
+  const writeJson = (file: string, value: unknown): Promise<void> => {
+    const text = `${JSON.stringify(value, null, 2)}\n`;
+    writing = writing
+      .catch(() => undefined)
+      .then(async () => {
+        await writeFile(`${file}.tmp`, text, "utf8");
+        await rename(`${file}.tmp`, file);
+      });
+    return writing;
   };
   const write = (output: BatchOutput) => writeJson(target, output);
 

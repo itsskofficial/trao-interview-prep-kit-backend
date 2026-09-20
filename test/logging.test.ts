@@ -36,6 +36,18 @@ describe("logger", () => {
     expect(written).toContain("ada@example.com");
   });
 
+  it("censors at any depth, inside arrays, and survives an object that contains itself", () => {
+    const { lines, stream } = capture();
+    const loop: Record<string, unknown> = { name: "loop" };
+    loop.self = loop;
+    createLogger("info", stream).info({ a: { b: { c: { d: { e: { token: "deep-secret" } } } } }, list: [{ apiKey: "in-a-list" }], loop, err: new Error("kept") });
+    const written = JSON.stringify(lines);
+    expect(written).not.toContain("deep-secret");
+    expect(written).not.toContain("in-a-list");
+    expect(written).toContain("[redacted]");
+    expect(lines[0]).toMatchObject({ loop: { name: "loop", self: "[omitted]" }, err: { message: "kept" } });
+  });
+
   it("says nothing below its level", () => {
     const { lines, stream } = capture();
     const logger = createLogger("warn", stream);
